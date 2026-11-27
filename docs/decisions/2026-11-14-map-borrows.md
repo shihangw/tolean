@@ -87,3 +87,9 @@ refused. Borrowing functions receive no per-file certificate yet. A wider
 result must preserve the final parameter bindings on every supported
 completion path; the statement proof must also relate newly declared
 source and output variables before a returned value can be copied out.
+
+Reject fixtures in `tests/typescript/corpus/translate/reject/mapBorrow*.ts`
+and `tests/typescript/corpus/translate/projects/reject/importedMapBorrow`
+record this boundary. Each of them fails translation today. Several of the
+refusals still use a general message, such as the one for a `void` return
+type, because the translator accepts no borrow shape that they would match.

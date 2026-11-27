@@ -12,7 +12,7 @@ rw [Parse.bind_eq (Parse.peek_eq hs), Parse.bind_eq (Parse.advance_eq hs),
 rfl
 ```
 
-`Parse.bind_eq : x s = .ok a s' → (x >>= f) s = f a s'`. The monad lemmas are stated once for every `EStateM` in `tolean/TypeScript/EStateM.lean`; `Parse`, `Lex` and the translator's proofs `export` them. Name every state with `let sₖ := past s x r` (or `{ s with rest := …, left := …, lastStop := … }`), and get sub-results (`hp : Parse.parseAssign g s₂ = .ok e' s₃`) at exactly those states. The chain matches syntactically, so a state the goal spells differently stops it.
+`Parse.bind_eq : x s = .ok a s' → (x >>= f) s = f a s'`. The monad lemmas are stated once for every `EStateM` in `tolean/Core/EStateM.lean`; `Parse`, `Lex` and the translator's proofs `export` them. Name every state with `let sₖ := past s x r` (or `{ s with rest := …, left := …, lastStop := … }`), and get sub-results (`hp : Parse.parseAssign g s₂ = .ok e' s₃`) at exactly those states. The chain matches syntactically, so a state the goal spells differently stops it.
 
 One big `simp [Parse.f, bind, EStateM.bind, …]` works only for short functions whose states stay simple. It normalizes nested `{ { s with … } with … }` states, and then a hypothesis about `sₖ` no longer matches.
 
