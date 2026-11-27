@@ -1,4 +1,3 @@
-// expect: 3:3 set, add and delete are allowed only on an owned map or set
 function bump(m: Map<string, bigint>, k: string): bigint {
   m.set(k, 1n);
   return 1n;

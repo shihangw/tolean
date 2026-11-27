@@ -263,7 +263,7 @@ def Feature.describe : Feature → String
   | .localSiblingCalls => "calls between local functions"
   | .regexp => "regular expressions without flags"
   | .regexpReplace => "regular expression replacement without substitutions"
-  | .mapBorrow => "a call that changes exclusively owned Map arguments"
+  | .mapBorrow => "a call that changes exclusively owned Map arguments, and may return a value"
   | .exponent => "'**'"
   | .objectSpread => "object spread '...'"
   | .bigint => "bigint"

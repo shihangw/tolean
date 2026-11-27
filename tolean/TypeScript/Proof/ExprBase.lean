@@ -230,6 +230,24 @@ structure CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × IR
       (Eval.borrowsOf ⟨p, key.file⟩).lookup key.name = some indices ∧
       Eval.execStmt ⟨p, key.file⟩ k (ps.zip vs).reverse source = some (.normal afterS) ∧
       ∀ q ∈ params, afterS.lookup q = after.lookup q
+  /-- A borrowing function that returns a value binds its variable `r` for
+  it, which the body assigns, and returns `r` with the selected maps through
+  a normal completion too. -/
+  value : ∀ k, fuel = k + 1 → ∀ key ps body indices params r (vs : List (Val N)) after,
+    fs.lookup key = some (ps, body) →
+    indices.mapM (ps[·]?) = some params →
+    body.returnedState = some (r :: params) →
+    r ∉ ps →
+    ps.length = vs.length →
+    IR.Body.exec fs k ((r, .undefined) :: (ps.zip vs).reverse) body = some (.normal after) →
+    ∃ source afterS,
+      (Eval.functionsOf p).lookup key = some (ps, source) ∧
+      (Eval.borrowsOf ⟨p, key.file⟩).lookup key.name = some indices ∧
+      source.borrowResult? = some r ∧
+      Stmt.ownsChangesBorrow (Eval.borrowsOf ⟨p, key.file⟩) ps source = false ∧
+      Eval.execStmt ⟨p, key.file⟩ k ((r, .undefined) :: (ps.zip vs).reverse) source =
+        some (.normal afterS) ∧
+      ∀ q ∈ r :: params, afterS.lookup q = after.lookup q
 
 instance : CoeFun (CallsAgree (N := N) p fs fuel)
     (fun _ => ∀ key vs r, callO (N := N) fs fuel key vs = some r → callS p fuel key vs = some r) :=

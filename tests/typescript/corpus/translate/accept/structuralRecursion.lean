@@ -75,15 +75,15 @@ def firstLarge (t : (Tree Int)) (limit : Int) : Int :=
     t.value
   else
     let found := (0 : Int)
-    let found :=
-      Id.run (forIn t.children found
-        (fun (c : (Tree Int)) (found : Int) =>
+    let (limit, found) :=
+      Id.run (forIn t.children (limit, found)
+        (fun (c : (Tree Int)) ((limit, found) : Int × Int) =>
           let v := (firstLarge c limit)
           if v > limit then
             let found := v
-            ForInStep.done found
+            ForInStep.done (limit, found)
           else
-            ForInStep.yield found))
+            ForInStep.yield (limit, found)))
     found
 termination_by t
 decreasing_by all_goals tolean_decreasing

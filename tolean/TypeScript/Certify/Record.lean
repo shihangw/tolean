@@ -21,7 +21,7 @@ def recordBodyGuards : IR.Body → RecordOwners
   | .ite condition yes no =>
     ownRecordGuard condition ++ recordBodyGuards yes ++ recordBodyGuards no
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest
-  | .letLifted _ _ rest | .bind _ _ _ rest | .letBorrow _ _ _ _ rest =>
+  | .letLifted _ _ rest | .bind _ _ _ rest | .letBorrow _ _ _ _ _ rest =>
     recordBodyGuards rest
   | .matchNull _ _ yes no | .matchTag _ _ _ _ _ yes no =>
     recordBodyGuards yes ++ recordBodyGuards no

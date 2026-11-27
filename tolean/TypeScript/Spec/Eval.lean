@@ -1382,7 +1382,9 @@ def preparedBody (thr : String → Bool) (cls : String → Option (Option ErrorC
     (guards : List (String × GuardTest))
     (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Stmt :=
   Stmt.hoisted thr cls (guardedBody guards params ret
-    (if (borrowCandidate? params ret body).isSome then body.borrowPrefix else body))
+    (match borrowCandidate? params ret body with
+      | some _ => body.borrowBody ret (borrowResultName (params.map (·.name)) body)
+      | none => body))
 
 def functionsIn (thr : String → Bool) (cls : String → Option (Option ErrorCtor))
     (guards : List (String × GuardTest))
@@ -2089,12 +2091,35 @@ Ordinary expressions still use `evalTop`, which keeps no state. -/
 def evalTopState (m : Scope) (fuel : Nat) (env : Env N) :
     Expr → Option (Except (Val N) (Val N) × Env N)
   | .call _ (.ident _ name) args => do
-    let .closure params body ← env.lookup name | none
-    if !changesCaptured env params body then none
-    let vs ← evalList m fuel env args
-    match fuel with
-    | 0 => none
-    | k + 1 => callLocal m k env params body vs
+    match env.lookup name with
+    | some (.closure params body) =>
+      if !changesCaptured env params body then none
+      let vs ← evalList m fuel env args
+      match fuel with
+      | 0 => none
+      | k + 1 => callLocal m k env params body vs
+    | some _ => none
+    -- A borrowing function that returns a value: its body assigns the value
+    -- to a variable `r` of its own, which the call binds first. The value of
+    -- `r` at the end is the result, and each changed map goes back into the
+    -- caller's variable, as for a call statement.
+    | none =>
+      let vs ← evalList m fuel env args
+      match fuel with
+      | 0 => none
+      | k + 1 =>
+        let is ← (borrowsOf m).lookup name
+        let targets ← borrowTargetsAt args is
+        let targets := targets.map (·.2)
+        if !decide targets.Nodup then none
+        let (params, body) ← (functionsOf m.program).lookup ⟨m.file, name⟩
+        if !holdMaps env targets then none
+        let ps ← is.mapM (params[·]?)
+        let r ← body.borrowResult?
+        let .normal after ← execStmt m k ((r, .undefined) :: (← bindArgs params vs)) body | none
+        let v ← after.lookup r
+        let inner ← borrowedMaps after (targets.zip ps)
+        return (.ok v, env.setAll inner)
   | _ => none
 termination_by e => (fuel, sizeOf e, 1)
 

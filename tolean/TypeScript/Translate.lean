@@ -510,6 +510,9 @@ structure FnInfo where
   /-- A normal-completion map borrow returns the parameters at these
   indices, in order, instead of void. -/
   borrow : Option (List Nat) := none
+  /-- The type of the value that a borrowing function returns besides its
+  maps, if it returns one. -/
+  borrowValue : Option Ty := none
 
 def FnInfo.ref (f : FnInfo) : DeclRef := ⟨f.file, f.name⟩
 
@@ -690,7 +693,7 @@ def bodySortObligations : IR.Body → List SortObligation
     bodySortObligations a ++ bodySortObligations b
   | .fold _ _ body items rest _ =>
     exprSortObligations items ++ bodySortObligations body ++ bodySortObligations rest
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest =>
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest =>
     exprListSortObligations args ++ bodySortObligations rest
   | .letCall _ _ _ value _ _ _ body args rest =>
     exprSortObligations value ++ bodySortObligations body ++
@@ -1582,6 +1585,11 @@ mutual
 
 def stmtChanges (fns : List (String × List String)) : Stmt → List String
   | .tryCatch _ b _ h => stmtChanges fns b ++ stmtChanges fns h
+  -- `const v = f(m, a)` may change the map `m`, when `f` borrows it.
+  | .varDecl _ { init := some (.call _ (.ident _ name) args), .. } =>
+    match fns.lookup name with
+    | some _ => calleeChanges fns (.ident default name) ++ exprsChanges fns args
+    | none => args.filterMap (fun e => match e with | .ident _ n => some n | _ => none) ++ exprsChanges fns args
   | .varDecl _ d => optionChanges fns d.init
   | .destructure _ _ _ _ init | .objectDestructure _ _ _ _ init => exprChanges fns init
   | .exprStmt _ (.call _ (.ident _ name) args) =>
@@ -4423,9 +4431,11 @@ def translateStatements (fuel : Nat) (env : Env) (tail : Tail) (statements : Lis
         return .letCall fn.changes fn.ref fn.name fn.closure fn.leanParams fn.leanRet false b outs
           (← translateStatements fuel env tail rest)
       if let some (fn, is, args) := borrowCall? env e then
+        if fn.borrowValue.isSome then
+          reject s s!"a call of '{fn.name}' as a statement drops its value; declare a const for it"
         let (names, call) ← translateBorrowCall env s fn is args
         let .call ref outs := call | reject s "invalid map borrow"
-        return .letBorrow names ref is outs (← translateStatements fuel env tail rest)
+        return .letBorrow none names ref is outs (← translateStatements fuel env tail rest)
       let (name, update) ← translateUpdate env s e
       return .let name update (← translateStatements fuel env tail rest)
     -- `function g(x: T): R { … }` in the body of the function: the output
@@ -4510,6 +4520,18 @@ def translateVariable (fuel : Nat) (env : Env) (s : Span) (d : VarDecl) (rest : 
     let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r
     return .letCall [d.name] fn.ref fn.name fn.closure fn.leanParams fn.leanRet true b outs
       (← translateStatements fuel env' tail rest)
+  -- `const x = f(m, a)`, where `f` changes the map `m` and returns a value:
+  -- the call binds `x` and the maps again.
+  if let some (fn, is, args) := borrowCall? env init then
+    let some r := fn.borrowValue
+      | reject s s!"'{fn.name}' returns nothing; call it as a statement of its own"
+    if fn.name == "Number" then reject s "invalid map borrow"
+    let declared ← translateAnnotation d.type
+    unless declared.all (· == r) do reject s "the call must have the declared type"
+    let (names, call) ← translateBorrowCall env s fn is args
+    let .call ref outs := call | reject s "invalid map borrow"
+    let env' ← declare env s d.name (if d.kind == .const then .const else .«let») r
+    return .letBorrow (some d.name) names ref is outs (← translateStatements fuel env' tail rest)
   match throwingCall? env.functions init with
   -- `const x = f(a)`, where `f` can throw: the output passes its error on, and
   -- binds `x` to the value otherwise.
@@ -5105,23 +5127,52 @@ def paramType (span : Span) (optional : Bool) (type : TypeExpr) (before : List T
   if ty == .null then reject span "an optional parameter of only null is not supported"
   return .optional ty.unoptional
 
-def functionReturnType (borrow : Option (List Nat)) (types : List Ty) (s : Span) (rt : TypeExpr)
-    (env : Env) (params : List Param) (body : Stmt) : TM Ty :=
-  match borrow with
-  | some [i] => orReject types[i]? s "the borrowed parameter has no type"
-  | some is => do
+def functionReturnType (borrow : Option (List Nat)) (value : Option Ty) (types : List Ty) (s : Span)
+    (rt : TypeExpr) (env : Env) (params : List Param) (body : Stmt) : TM Ty :=
+  match borrow, value with
+  | some [i], none => orReject types[i]? s "the borrowed parameter has no type"
+  | some is, none => do
     let tys ← orReject (is.mapM (types[·]?)) s "the borrowed parameter has no type"
     return .tuple tys
-  | none => isolated (translateReturnType env params rt body)
+  | some is, some v => do
+    let tys ← orReject (is.mapM (types[·]?)) s "the borrowed parameter has no type"
+    return .tuple (v :: tys)
+  | none, _ => isolated (translateReturnType env params rt body)
 
-def checkBorrowResult (s : Span) (borrow : Option (List Nat)) (name : String)
-    (borrows : List (String × List Nat)) (params : Option (List String)) (out : IR.Body) : TM Unit :=
+/-- A borrowing function must keep the borrow that the module gives it and
+return its value and its changed maps on normal completion. No other call
+may run it, so the spec refuses any other call of it (`owns` is false), as
+it does for a function that changes a parameter. -/
+def checkBorrowResult (s : Span) (borrow : Option (List Nat)) (result : Option String) (name : String)
+    (borrows : List (String × List Nat)) (params : Option (List String)) (out : IR.Body) (owns : Bool) :
+    TM Unit :=
   match borrow, params with
   | some indices, some params => do
-    unless borrows.lookup name == some indices && out.returnedState == some params do
+    unless borrows.lookup name == some indices && out.returnedState == some (result.toList ++ params) &&
+        !owns do
       reject s "a map borrow must return its changed parameters on normal completion"
   | some _, none => reject s "the borrowed parameter is missing"
-  | none, _ => pure ()
+  -- A function that does not borrow returns through `return`, never with a
+  -- state, so that no call can mistake it for a borrow.
+  | none, _ => unless out.returnedState.isNone do reject s "invalid map borrow"
+
+/-- The type of the value that a borrowing function returns besides its
+maps, if it returns one. -/
+def borrowValueType (borrow : Option (List Nat)) (rt : TypeExpr) : TM (Option Ty) :=
+  match borrow, rt with
+  | some _, .keyword _ "void" => pure none
+  | some _, rt => some <$> isolated (translateType rt)
+  | none, _ => pure none
+
+/-- A borrowing function that returns a value assigns it to a variable of
+its own, which ends up in the state that it returns. -/
+def borrowResultLocal (s : Span) (env : Env) (value : Option Ty) (body : Stmt) : TM (Env × Option String) :=
+  match value with
+  | none => pure (env, none)
+  | some v => do
+    let some r := body.borrowResult? | reject s "invalid map borrow"
+    if env.has r then reject s "invalid map borrow"
+    pure (env.add { name := r, binding := .«let», type := v }, some r)
 
 def borrowLocals (locals : List Local) (params : Option (List String)) : List Local :=
   locals.map fun l => if (params.map (·.contains l.name)).getD false then { l with binding := .map } else l
@@ -5156,22 +5207,32 @@ def translateFunction (thr : String → Bool) (cls : String → Option (Option E
       let ty ← paramType p.span p.optional type types
       pure (env.add { name := paramName, binding := .param, type := ty },
         leanParams ++ [(paramName, ty.lean)], types ++ [ty])
-  let borrow := if typeParams.isEmpty then borrowCandidate? params (some returnType) body else none
-  let ret ← functionReturnType borrow types s returnType env params sourceBody
+  let borrow := if typeParams.isEmpty then borrowCandidate? params (some returnType) sourceBody else none
+  -- A borrowing function that returns a value returns it first, and then
+  -- its maps.
+  let borrowValue ← borrowValueType borrow returnType
+  let ret ← functionReturnType borrow borrowValue types s returnType env params sourceBody
   let throws := stmtsThrow ctx.functions (blockStatements body)
   modify fun c => { c with currentFunction := name, returnType := ret, throws }
   -- The body may call the function itself. Lean must see that the calls
   -- end, so each must pass a part of one parameter, the same one in every
   -- call.
   let self : FnInfo :=
-    { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name, borrow }
+    { file := ctx.file, name, exported, typeParams, params := types, ret, throws, hoists := thr name, borrow,
+      borrowValue }
   let borrowedNames := borrow.bind fun is => is.mapM fun i => (params[i]?).map (·.name)
   let locals := borrowLocals env.locals borrowedNames
   let env : Env := { env with locals }
-  let tail := match borrowedNames with | some ns => Tail.state ns | none => .ret
+  -- A borrowing function that returns a value assigns it to a variable of
+  -- its own, which ends up in the state that it returns.
+  let (env, result) ← borrowResultLocal s env borrowValue body
+  let tail := match borrowedNames with
+    | some ns => Tail.state (result.toList ++ ns)
+    | none => .ret
   let out ← isolated (translateStatements (← fuelLimit) { env with functions := env.functions ++ [self] } tail
     (blockStatements body))
-  checkBorrowResult s borrow name ctx.borrows borrowedNames out
+  checkBorrowResult s borrow result name ctx.borrows borrowedNames out
+    (Stmt.ownsChangesBorrow ctx.borrows (params.map (·.name)) body)
   if out.calls self.ref && (out.decreasingParam? self.ref leanParams).isNone then
     reject s ("a function may call itself only on a part of one of its parameters, the same one in " ++
       "every call: a field of it, a value that a test narrows it to, or an element of an array in it")

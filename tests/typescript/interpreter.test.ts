@@ -3057,13 +3057,25 @@ test('normal-completion map borrows copy the final map back without aliases', as
   }
 });
 
-// Calls that return a value still have no state-carrying result.
+// A borrow that returns a value may only initialize a `const` or `let`
+// whose caller owns the map.
 test('map calls preserve the boundary between readonly inputs and pending borrows', async () => {
   const change = 'function change(m: Map<bigint, bigint>): boolean { m.set(1n, 2n); return true; }\n';
   const cases = [
     {
       source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); ' +
         'const done = change(m); return m.has(1n); }',
+      refused: false,
+    },
+    {
+      source: 'function bump(m: Map<bigint, bigint>, k: bigint): bigint { m.set(k, 1n); return k + 1n; }\n' +
+        'export function f(): boolean { const m = new Map<bigint, bigint>(); ' +
+        'const n = bump(m, 1n); return n === 2n && m.has(1n); }',
+      refused: false,
+    },
+    {
+      source: change + 'export function f(): boolean { const m = new Map<bigint, bigint>(); ' +
+        'return change(m) && m.has(1n); }',
       refused: true,
     },
     {

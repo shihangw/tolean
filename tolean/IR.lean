@@ -320,9 +320,11 @@ inductive Body (T E : Type) where
   | bind (name : String) (ref : DeclRef) (args : List (Expr T E)) (rest : Body T E)
   /-- `let (x, y) := f a b`, then `rest`: a global call that copies the
   final value of the parameter at each of `indices` back into the variable
-  of `names` at the same position. Its body completes with a state result
-  rather than a return. -/
-  | letBorrow (names : List String) (ref : DeclRef) (indices : List Nat) (args : List (Expr T E))
+  of `names` at the same position. When `result` is none, the body completes
+  with a state result rather than a return. When it is `some x`, the
+  function returns a value too: the body returns the tuple of the value and
+  the final maps, and `x` takes the value, as in `let (x, a, b) := f a b`. -/
+  | letBorrow (result : Option String) (names : List String) (ref : DeclRef) (indices : List Nat) (args : List (Expr T E))
       (rest : Body T E)
   /-- `let (x, y) := f.g a b`, then `rest`: a call of the function `ref` that
   the translator lifted out of the function around the call. The call holds
@@ -345,7 +347,7 @@ def Body.hasReturningLoop : Body T E → Bool
   | .handle a b => a.hasReturningLoop || b.hasReturningLoop
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => false
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
-      .bind _ _ _ rest | .letBorrow _ _ _ _ rest | .letLifted _ _ rest => rest.hasReturningLoop
+      .bind _ _ _ rest | .letBorrow _ _ _ _ _ rest | .letLifted _ _ rest => rest.hasReturningLoop
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b |
       .letState _ a b => a.hasReturningLoop || b.hasReturningLoop
   | .fold _ _ body _ rest info =>
@@ -356,7 +358,7 @@ def Body.hasReturningLoop : Body T E → Bool
 before copying out a parameter, rather than accepting any normal completion. -/
 def Body.returnedState : Body T E → Option (List String)
   | .state names => some names
-  | .let _ _ rest | .letBorrow _ _ _ _ rest => rest.returnedState
+  | .let _ _ rest | .letBorrow _ _ _ _ _ rest => rest.returnedState
   | _ => none
 
 /-- A declaration in the output. -/
@@ -456,7 +458,7 @@ def Body.refs : Body T E → List DeclRef
   | .matchTag _ r _ _ _ a b => r :: (a.refs ++ b.refs)
   | .fold _ _ body items rest _ => body.refs ++ items.refs ++ rest.refs
   | .throw e => e.refs
-  | .bind _ r args rest | .letBorrow _ r _ args rest => r :: (Expr.refsList args ++ rest.refs)
+  | .bind _ r args rest | .letBorrow _ _ r _ args rest => r :: (Expr.refsList args ++ rest.refs)
   -- The lifted function is declared with the function around the call, so
   -- only what it names counts.
   | .letCall _ _ _ _ ps rt _ body args rest =>
@@ -474,7 +476,7 @@ def Body.throws : Body T E → Bool
   | .fold _ _ body _ rest _ => body.throws || rest.throws
   -- The lifted function is printed apart from the call, and it cannot
   -- throw, so only what comes after the call counts.
-  | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => rest.throws
+  | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ _ rest => rest.throws
 
 /-- The functions and structures of the program that `d` names. -/
 def Decl.refs : Decl T E → List DeclRef
@@ -561,7 +563,7 @@ def Body.usesString (opUses : E → Bool) : Body T E → Bool
     Body.usesString opUses body || Expr.usesString opUses items || Body.usesString opUses rest ||
       info.stateTypes.any (·.usesString) || info.elem.usesString
   | .throw e => Expr.usesString opUses e
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest => Expr.usesStringList opUses args || Body.usesString opUses rest
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest => Expr.usesStringList opUses args || Body.usesString opUses rest
   | .letCall _ _ _ _ ps rt _ body args rest =>
     ps.any (·.2.usesString) || rt.usesString || Body.usesString opUses body ||
       Expr.usesStringList opUses args || Body.usesString opUses rest
@@ -632,7 +634,7 @@ def Body.usesMap : Body T E → Bool
     body.usesMap || items.usesMap onMap || rest.usesMap ||
       info.stateTypes.any (·.usesMap) || info.elem.usesMap
   | .throw e => e.usesMap onMap
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest => Expr.usesMapList onMap args || rest.usesMap
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest => Expr.usesMapList onMap args || rest.usesMap
   | .letCall _ _ _ _ ps rt _ body args rest =>
     ps.any (·.2.usesMap) || rt.usesMap || body.usesMap || Expr.usesMapList onMap args || rest.usesMap
   | .letLifted _ _ rest => rest.usesMap
@@ -687,7 +689,7 @@ def Body.anyOp : Body T E → Bool
   | .ite c a b => c.anyOp p || a.anyOp || b.anyOp
   | .matchNull _ _ a b | .letState _ a b | .matchTag _ _ _ _ _ a b => a.anyOp || b.anyOp
   | .fold _ _ body items rest _ => body.anyOp || items.anyOp p || rest.anyOp
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest => Expr.anyOpList p args || rest.anyOp
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest => Expr.anyOpList p args || rest.anyOp
   | .letCall _ _ _ _ _ _ _ body args rest => body.anyOp || Expr.anyOpList p args || rest.anyOp
   | .letLifted _ _ rest => rest.anyOp
 
@@ -761,7 +763,7 @@ def Body.mentions : Body T E → Bool
   | .fold _ _ body items rest info =>
     body.mentions || items.mentions onTy onOp || rest.mentions ||
       info.stateTypes.any (·.anyExt onTy) || info.elem.anyExt onTy
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest => Expr.mentionsList onTy onOp args || rest.mentions
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest => Expr.mentionsList onTy onOp args || rest.mentions
   | .letCall _ _ _ _ ps rt _ body args rest =>
     ps.any (·.2.anyExt onTy) || rt.anyExt onTy || body.mentions || Expr.mentionsList onTy onOp args ||
       rest.mentions
@@ -1066,7 +1068,7 @@ def Body.testsTag (name : String) : Body T E → Bool
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b => a.testsTag name || b.testsTag name
   | .fold _ _ body _ rest _ => body.testsTag name || rest.testsTag name
   | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
-  | .letBorrow _ _ _ _ rest => rest.testsTag name
+  | .letBorrow _ _ _ _ _ rest => rest.testsTag name
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => false
 
 /-! ### Recursion
@@ -1199,9 +1201,9 @@ def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
   | .bind name r args rest =>
     (Expr.call r args).callsShrink self i need depths &&
       rest.callsShrink self i need (bindPart depths name Option.none)
-  | .letBorrow names r _ args rest =>
+  | .letBorrow result names r _ args rest =>
     (Expr.call r args).callsShrink self i need depths &&
-      rest.callsShrink self i need (forgetParts depths names)
+      rest.callsShrink self i need (forgetParts depths (result.toList ++ names))
   -- A lifted function never calls the function around it.
   | .letCall names _ _ _ _ _ _ _ args rest =>
     Expr.callsShrinkList self i need depths args && rest.callsShrink self i need (forgetParts depths names)
@@ -1245,7 +1247,7 @@ def Body.calls (self : DeclRef) : Body T E → Bool
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.calls self || b.calls self
   | .fold _ _ body items rest _ => body.calls self || items.calls self || rest.calls self
   | .throw e => e.calls self
-  | .bind _ r args rest | .letBorrow _ r _ args rest => r == self || Expr.callsList self args || rest.calls self
+  | .bind _ r args rest | .letBorrow _ _ r _ args rest => r == self || Expr.callsList self args || rest.calls self
   | .letCall _ _ _ _ _ _ _ _ args rest => Expr.callsList self args || rest.calls self
   | .letLifted _ _ rest => rest.calls self
 
@@ -1568,8 +1570,8 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
     s!"{(Expr.call ref args).print names} >>= fun {identName name} =>" :: rest.lines names monadic
-  | .letBorrow ns ref _ args rest =>
-    s!"let {tuple ns} := {(Expr.call ref args).print names}" :: rest.lines names monadic
+  | .letBorrow result ns ref _ args rest =>
+    s!"let {tuple (result.toList ++ ns)} := {(Expr.call ref args).print names}" :: rest.lines names monadic
   -- A call whose value the body returns at once is that value. The lifted
   -- body of the call is not printed here: `printFunction` prints the body
   -- that the declaration gave, and the translator checks that each call's
@@ -1614,7 +1616,7 @@ def Body.lifted : Body T E → List (DeclRef × List (String × Ty T) × Ty T ×
   | .handle a b => a.lifted ++ b.lifted
   | .letCall _ r _ _ ps rt _ body _ rest => body.lifted ++ (r, ps, rt, body) :: rest.lifted
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest | .letLifted _ _ rest | .bind _ _ _ rest
-  | .letBorrow _ _ _ _ rest =>
+  | .letBorrow _ _ _ _ _ rest =>
     rest.lifted
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => a.lifted ++ b.lifted
   | .fold _ _ body _ rest _ => body.lifted ++ rest.lifted
