@@ -122,9 +122,11 @@ written, so that other documents can name a step.
    range, and a call of a function that can panic, which the Go IR runs
    with `Body.bind`. State is not done, and Go does not need
    it yet: the Go code that the proved path accepts reads only parameters and
-   locals, which the environment holds. Go will need state for package-level
-   variables and for slices, which a callee can change; build the state
-   piece with the first of these, so that Go is its second user.
+   locals, which the environment holds. Package-level constants need no state either,
+   because the interpreter holds their values in the program. Go will need
+   state for package-level variables and for slices, which a callee can
+   change; build the state piece with the first of these, so that Go is its
+   second user.
 4. The `EStateM` lemmas are in the shared module `tolean/Core/EStateM.lean`,
    and `tolean/Core/Except.lean` holds `Core.Res`, the result of a
    computation that can fail or throw, with its bind lemmas. The lemmas for

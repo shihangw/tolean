@@ -771,15 +771,30 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
           rw [Eval.eval, ha name, hv, outcome_nil]
         · next hl =>
           split at h
-          · next b hb =>
-            simp only [pure_ok, Prod.mk.injEq] at h
-            obtain ⟨rfl, -⟩ := h
-            simp only [IR.Expr.eval, Option.some.injEq] at hv
-            subst hv
-            refine ⟨[], by simp [divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
-            rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp, hb, outcome_nil]
-            rfl
-          · exact absurd h reject_ne_ok
+          -- A constant of the package.
+          · next te w hw =>
+            split at h
+            · simp only [pure_ok, Prod.mk.injEq] at h
+              obtain ⟨rfl, -⟩ := h
+              have hv' : v = w := by
+                cases w <;> simp [valueCode, IR.Expr.eval] at hv <;> exact hv.symm
+              subst hv'
+              refine ⟨[], by cases v <;> simp [valueCode, divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
+              rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
+              simp [Eval.global, hw, outcome_nil, Res.lift]
+            · exact absurd h reject_ne_ok
+          -- `true` or `false`.
+          · next hc =>
+            split at h
+            · next b hb =>
+              simp only [pure_ok, Prod.mk.injEq] at h
+              obtain ⟨rfl, -⟩ := h
+              simp only [IR.Expr.eval, Option.some.injEq] at hv
+              subst hv
+              refine ⟨[], by simp [divisors, IR.Expr.evalList], checkVals_nil, ?_⟩
+              rw [Eval.eval, scoped_none hs (env_lookup_none hl), ← hp]
+              simp [Eval.global, hc, hb, outcome_nil, Res.lift]
+            · exact absurd h reject_ne_ok
       -- An integer literal.
       · next sp raw =>
         split at h

@@ -97,6 +97,16 @@ and `--`, test with `if`, `else` and `switch`, and return. The translator writes
 function through `tolean/Go/Translate/Pure.lean`, which proves that
 translation, and it writes everything else as before.
 
+A pure function may read a constant that the package declares at the top
+level, such as `const Limit = 100` or `const Fee int64 = 3`, alone or in a
+group. The constant's value must be an integer or string literal, an integer
+literal after `-`, `true` or `false`, and a typed constant must have one of
+the four types above. The output writes the value where the function reads
+the name. A constant that uses `iota`, another constant or an operator, and
+every package-level `var`, keep the function on the string translation. The
+[decision record](../decisions/2026-11-26-go-package-constants.md) gives the
+reasons, and the corpus package `consts` shows the output.
+
 An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
 `switch` may have a tag or none, an init statement, several values in one
 case, and a `default` clause anywhere in its body. The translator writes a
