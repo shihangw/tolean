@@ -318,9 +318,12 @@ inductive Body (T E : Type) where
   that can throw. The function ends with the error when the call throws, and
   `rest` runs with `x` bound to its value otherwise. -/
   | bind (name : String) (ref : DeclRef) (args : List (Expr T E)) (rest : Body T E)
-  /-- A global call that copies the final value of parameter `index` back
-  into `name`. Its body completes with a state result rather than a return. -/
-  | letBorrow (name : String) (ref : DeclRef) (index : Nat) (args : List (Expr T E)) (rest : Body T E)
+  /-- `let (x, y) := f a b`, then `rest`: a global call that copies the
+  final value of the parameter at each of `indices` back into the variable
+  of `names` at the same position. Its body completes with a state result
+  rather than a return. -/
+  | letBorrow (names : List String) (ref : DeclRef) (indices : List Nat) (args : List (Expr T E))
+      (rest : Body T E)
   /-- `let (x, y) := f.g a b`, then `rest`: a call of the function `ref` that
   the translator lifted out of the function around the call. The call holds
   the lifted function: its parameters, its result type and its body, which
@@ -1193,9 +1196,12 @@ def Body.callsShrink (self : DeclRef) (i : Nat) (need : Int) (depths : List (Str
       rest.callsShrink self i need outer
   | .throw e => e.callsShrink self i need depths
   -- The value of a call is not a part of `p`.
-  | .bind name r args rest | .letBorrow name r _ args rest =>
+  | .bind name r args rest =>
     (Expr.call r args).callsShrink self i need depths &&
       rest.callsShrink self i need (bindPart depths name Option.none)
+  | .letBorrow names r _ args rest =>
+    (Expr.call r args).callsShrink self i need depths &&
+      rest.callsShrink self i need (forgetParts depths names)
   -- A lifted function never calls the function around it.
   | .letCall names _ _ _ _ _ _ _ args rest =>
     Expr.callsShrinkList self i need depths args && rest.callsShrink self i need (forgetParts depths names)
@@ -1562,8 +1568,8 @@ def Body.lines (names : Names) (monadic : Bool := false) : Body T E → List Str
   | .throw e => [wrapped "throw" (e.print names)]
   | .bind name ref args rest =>
     s!"{(Expr.call ref args).print names} >>= fun {identName name} =>" :: rest.lines names monadic
-  | .letBorrow name ref _ args rest =>
-    s!"let {identName name} := {(Expr.call ref args).print names}" :: rest.lines names monadic
+  | .letBorrow ns ref _ args rest =>
+    s!"let {tuple ns} := {(Expr.call ref args).print names}" :: rest.lines names monadic
   -- A call whose value the body returns at once is that value. The lifted
   -- body of the call is not printed here: `printFunction` prints the body
   -- that the declaration gave, and the translator checks that each call's

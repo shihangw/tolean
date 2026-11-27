@@ -1321,7 +1321,7 @@ trusted](#what-is-proved-and-what-is-trusted).
 
 ### Map borrows
 
-A function may change one Map that its caller owns. The function must be
+A function may change Maps that its caller owns. The function must be
 declared earlier in the same file, have a `void` return type, and contain
 only `set`, `delete` and forwarding calls. Their arguments must be identifiers or
 literal numbers, bigints, strings or booleans. The function reaches the end
@@ -1361,8 +1361,23 @@ passes the final map from `change` back through `forward` to its caller.
 Each call rebinds the map, so updates before and after the forwarded call
 remain visible.
 
-Early returns, several Map parameters, returned values, branches,
-loops and imported borrows remain refused.
+A function may change several Maps. Then every mutable Map parameter
+must change, and the Lean function returns a tuple of the final maps in
+parameter order:
+
+```ts
+function move(a: Map<string, bigint>, b: Map<string, bigint>, k: string): void {
+  a.delete(k);
+  b.set(k, 1n);
+}
+```
+
+Here the caller writes `let (a, b) := (move a b k)`. The caller must pass a
+different map for each changed parameter. A call such as `move(a, a, k)`
+fails translation, because the two parameters would share one map.
+
+Early returns, returned values, branches, loops and imported borrows
+remain refused.
 Optional parameters and generic borrowing functions remain refused too.
 The certifier also refuses borrowing functions: its link proof does not
 yet describe the final map as the function's result.
