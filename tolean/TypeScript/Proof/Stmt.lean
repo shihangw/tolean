@@ -3687,6 +3687,7 @@ theorem rebind_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : 
     refine ⟨htail, new, out, mod₂, Ends.congr (by simp [Eval.exec, hst0, hst]) hex, hag₂, hnew, hout, ?_⟩
     simpa [stmtsChanges] using hfr₂.trans hfr
 
+omit [JSNumber N] in
 /-- Changing the variables of `binds` changes only those names. -/
 theorem Frame.setAll {c : List String} :
     ∀ (binds env : Eval.Env N), (∀ p ∈ binds, p.1 ∈ c) → Frame c (env.setAll binds) env

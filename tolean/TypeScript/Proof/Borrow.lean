@@ -22,7 +22,7 @@ theorem lookup_set_isSome (ρ : Eval.Env N) (k n : String) (v : Val N) :
         | cons p rest ih =>
           obtain ⟨j, w⟩ := p
           have hj : j ≠ k := by
-            intro hj; subst hj; simp [Eval.Env.lookup_cons] at h'
+            intro hj; subst hj; simp at h'
           have hr : rest.lookup k = none := by
             have hj' : ¬ k = j := fun e => hj e.symm
             simpa [Eval.Env.lookup_cons, hj'] using h'
