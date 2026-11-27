@@ -3099,6 +3099,70 @@ test('normal-completion map borrows copy the final map back without aliases', as
 });
 
 // Calls that return a value still have no state-carrying result.
+test('a throw out of a map borrow ends the owner with the same error', async () => {
+  const check = 'function check(x: bigint): bigint { if (x < 0n) { throw new Error("negative"); } return x; }\n';
+  const cases = [
+    {
+      source: check +
+        'function put(m: Map<bigint, bigint>, x: bigint): void { m.set(1n, x); check(x); m.set(2n, x); }\n' +
+        'function forward(m: Map<bigint, bigint>, x: bigint): void { put(m, x); m.delete(1n); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'forward(m, x); return (m.get(1n) ?? 7n) + (m.get(2n) ?? 0n); }',
+      refused: false,
+    },
+    {
+      source: check +
+        'function put(m: Map<bigint, bigint>, x: bigint): void { check(x); m.set(1n, x); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'put(m, x); put(m, x - 5n); return m.get(1n) ?? 0n; }',
+      refused: false,
+    },
+    {
+      // A check call may not see the borrowed map.
+      source: 'function check(m: ReadonlyMap<bigint, bigint>): bigint { if (m.has(1n)) { throw new Error("full"); } return 0n; }\n' +
+        'function put(m: Map<bigint, bigint>, x: bigint): void { check(m); m.set(1n, x); }\n' +
+        'export function f(x: bigint): bigint { const m = new Map<bigint, bigint>(); ' +
+        'put(m, x); return m.get(1n) ?? 0n; }',
+      refused: true,
+    },
+  ];
+  const inputs = [-9n, 0n, 17n];
+  const run = spawnSync(tolean, ['interpret'], {
+    input: JSON.stringify({ programs: cases.map(({ source }) => ({
+      source, calls: inputs.map(x => ({ function: 'f', args: [encode(x)] })),
+    })) }),
+    encoding: 'utf8',
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const results = (JSON.parse(run.stdout) as { programs: Array<Interpreted> }).programs;
+  const dir = mkdtempSync(join(tmpdir(), 'tolean-map-borrow-throws-'));
+  for (const [i, { source, refused }] of cases.entries()) {
+    const lean = results[i];
+    expect(lean?.parsed, source).toBe(true);
+    if (!lean?.parsed) continue;
+    const path = join(dir, `case${i}.mjs`);
+    writeFileSync(path, ts.transpileModule(source, {
+      compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.ESNext },
+    }).outputText);
+    const mod = (await import(pathToFileURL(path).href)) as { f: (x: bigint) => bigint };
+    for (const [j, x] of inputs.entries()) {
+      const got = lean.results[j] ?? null;
+      if (refused) {
+        expect(got, source).toBeNull();
+        continue;
+      }
+      let actual: NodeResult;
+      try {
+        actual = { returns: mod.f(x) };
+      } catch (thrown) {
+        actual = { throws: String(thrown), thrown };
+      }
+      if ('returns' in actual) expect(got && 'value' in got ? got.value : got, source).toEqual(encode(actual.returns));
+      else expect(got && 'throws' in got ? canonical(got.throws) : got, source).toBe(shownThrow(actual.thrown));
+    }
+  }
+});
+
 test('map calls preserve the boundary between readonly inputs and pending borrows', async () => {
   const change = 'function change(m: Map<bigint, bigint>): boolean { m.set(1n, 2n); return true; }\n';
   const cases = [

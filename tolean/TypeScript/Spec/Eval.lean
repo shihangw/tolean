@@ -1316,7 +1316,11 @@ def Stmt.hoistOne (thr : String → Bool) (cls : String → Option (Option Error
     (h.decls ++ [.returnStmt s (some e')], h.next)
   | .exprStmt s e =>
     let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
-    (h.decls ++ [.exprStmt s e'], h.next)
+    -- `f(x);`, where `f` can throw: the declaration that the hoisting adds
+    -- makes the call, and reading its fresh name again would do nothing.
+    match e, e' with
+    | .call _ (.ident _ _) _, .ident .. => (h.decls, h.next)
+    | _, _ => (h.decls ++ [.exprStmt s e'], h.next)
   | .throwStmt s e =>
     let (e', h) := Expr.hoist thr cls ⟨[], k⟩ e
     (h.decls ++ [.throwStmt s e'], h.next)
@@ -1392,9 +1396,28 @@ def functionsIn (thr : String → Bool) (cls : String → Option (Option ErrorCt
       some (name, params.map (·.name), preparedBody thr cls guards params ret body)
     | _ => none
 
+/-- Borrow signatures checked in declaration order. A forwarding function
+must put each of its maps at a borrowed argument index of an earlier
+checked callee. Imports and generic functions are outside this borrow case. -/
+def moduleBorrows (file : Module) : List (String × List Nat) :=
+  file.decls.foldl (fun borrows decl =>
+    match decl with
+    | .function _ _ name [] ps ret body =>
+      match borrowParam? borrows ps ret body with
+      | some is => borrows ++ [(name, is)]
+      | none => borrows
+    | _ => borrows) []
+
+/-- The functions whose calls `Stmt.hoisted` moves into declarations of
+their own: those that can throw, except a borrowing function. A call of a
+borrowing function stays a statement, because only the statement copies
+the changed maps back (`execStmt`). -/
+def hoistThrows (m : Module) (name : String) : Bool :=
+  mayThrow m name && ((moduleBorrows m).lookup name).isNone
+
 /-- The functions of the module, by name. -/
 def functions (m : Module) : List (String × List String × Stmt) :=
-  functionsIn (mayThrow m) (errorClassOf m) (guardTests m) m.decls
+  functionsIn (hoistThrows m) (errorClassOf m) (guardTests m) m.decls
 
 /-! ### Programs of several files
 
@@ -1414,18 +1437,6 @@ abbrev Program := List (String × Module)
 structure Scope where
   program : Program
   file : String
-
-/-- Borrow signatures checked in declaration order. A forwarding function
-must put each of its maps at a borrowed argument index of an earlier
-checked callee. Imports and generic functions are outside this borrow case. -/
-def moduleBorrows (file : Module) : List (String × List Nat) :=
-  file.decls.foldl (fun borrows decl =>
-    match decl with
-    | .function _ _ name [] ps ret body =>
-      match borrowParam? borrows ps ret body with
-      | some is => borrows ++ [(name, is)]
-      | none => borrows
-    | _ => borrows) []
 
 def borrowsOf (m : Scope) : List (String × List Nat) :=
   ((m.program.lookup m.file).map moduleBorrows).getD []
@@ -2372,8 +2383,12 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
         let (params, body) ← (functionsOf m.program).lookup ⟨m.file, name⟩
         if !holdMaps env targets then none
         let ps ← is.mapM (params[·]?)
-        let .normal after ← execStmt m fuel (← bindArgs params vs) body | none
-        return .normal (env.setAll (← borrowedMaps after (targets.zip ps)))
+        match ← execStmt m fuel (← bindArgs params vs) body with
+        | .normal after => return .normal (env.setAll (← borrowedMaps after (targets.zip ps)))
+        -- A throw ends the caller too. No `try` body may make a call
+        -- (`Stmt.catchSafe`), so nothing can observe the maps after it.
+        | .ret (.error t) => return .ret (.error t)
+        | _ => none
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its

@@ -930,7 +930,9 @@ def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt)
 
 /-- A forwarded call changes a candidate parameter only when it occurs at
 one of the checked callee's borrowed argument indices, and every such index
-holds a candidate. No parameter may hide that top-level callee. -/
+holds a candidate. No parameter may hide that top-level callee. A call of a
+function that borrows nothing may not pass a candidate: such a call matters
+only when it throws, and the throw ends the caller's call too. -/
 def Stmt.borrowCallsValid (borrows : List (String × List Nat)) (params : List String)
     (ps : List String) : Stmt → Bool
   | .exprStmt _ (.call _ (.ident _ name) args) =>
@@ -943,7 +945,9 @@ def Stmt.borrowCallsValid (borrows : List (String × List Nat)) (params : List S
         (args.zipIdx.all fun (a, j) => match a with
           | .ident _ x => !ps.contains x || is.contains j
           | _ => true)
-      | none => false
+      | none => args.all fun a => match a with
+          | .ident _ x => !ps.contains x
+          | _ => true
   | _ => true
 
 /-- The map parameters whose final values a normal completion copies out.

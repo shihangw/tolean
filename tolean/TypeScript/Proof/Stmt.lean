@@ -3687,6 +3687,47 @@ theorem rebind_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : 
     refine ⟨htail, new, out, mod₂, Ends.congr (by simp [Eval.exec, hst0, hst]) hex, hag₂, hnew, hout, ?_⟩
     simpa [stmtsChanges] using hfr₂.trans hfr
 
+/-- `rebind_sim`, for a statement that may also end the body with a throw
+that the source statement makes too. -/
+theorem rebind_or_ret_sim {env : Translate.Env} {st : Stmt} {rest : List Stmt} {tail : Tail} {body rb : IR.Body}
+    {names : List String} (hst0 : st.constAssignedIn rest = false)
+    (hsub : ∀ n, n ∈ names → n ∈ stmtChanges env.fnChanges st)
+    (hbody : ∀ (ρs ρo : Eval.Env N) (o : Outcome N), Agree ρs ρo → Scoped m env ρs →
+      IR.Body.exec fs fuel ρo body = some o →
+      (∃ inner mod ρo₂, IR.bindState names inner ρo = some ρo₂ ∧ IR.Body.exec fs fuel ρo₂ rb = some o ∧
+        Eval.execStmt m fuel ρs st = some (.normal mod) ∧ (∀ n ∈ names, mod.lookup n = inner.lookup n) ∧
+        Frame names mod ρs) ∨
+      (∃ v, o = .ret v ∧ Eval.execStmt m fuel ρs st = some (.ret v)))
+    (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
+    StmtSim (N := N) m fs fuel env tail (st :: rest) body := by
+  intro ρs ρo ha hs
+  have key : ∀ o, IR.Body.exec fs fuel ρo body = some o →
+      (∃ mod ρo₂, Eval.execStmt m fuel ρs st = some (.normal mod) ∧
+        Agree mod ρo₂ ∧ Frame (stmtChanges env.fnChanges st) mod ρs ∧ IR.Body.exec fs fuel ρo₂ rb = some o) ∨
+      (∃ v, o = .ret v ∧ Eval.execStmt m fuel ρs st = some (.ret v)) := by
+    intro o ho
+    rcases hbody ρs ρo o ha hs ho with ⟨inner, mod, ρo₂, hbs, hrb, hst, hnames, hfr⟩ | hret
+    · refine Or.inl ⟨mod, ρo₂, hst, fun n => ?_, hfr.mono fun n hn => hsub n hn, hrb⟩
+      rw [bindState_lookup hbs n]
+      split
+      · rename_i hn; exact hnames n hn
+      · rename_i hn; rw [← ha n]; exact hfr.lookup hn
+    · exact Or.inr hret
+  constructor
+  · intro v hv
+    rcases key _ hv with ⟨mod, ρo₂, hst, hag, hfr, hb⟩ | ⟨w, hw, hst⟩
+    · have := (hrest mod ρo₂ hag (scoped_frame hs hfr)).1 v hb
+      simp [Eval.exec, hst0, hst, this]
+    · cases hw
+      simp [Eval.exec, hst0, hst]
+  · intro brk ρo' hv
+    rcases key _ hv with ⟨mod, ρo₂, hst, hag, hfr, hb⟩ | ⟨w, hw, -⟩
+    · obtain ⟨htail, new, out, mod₂, hex, hag₂, hnew, hout, hfr₂⟩ :=
+        (hrest mod ρo₂ hag (scoped_frame hs hfr)).2 brk ρo' hb
+      refine ⟨htail, new, out, mod₂, Ends.congr (by simp [Eval.exec, hst0, hst]) hex, hag₂, hnew, hout, ?_⟩
+      simpa [stmtsChanges] using hfr₂.trans hfr
+    · cases brk <;> simp [endOf] at hw
+
 omit [JSNumber N] in
 /-- Changing the variables of `binds` changes only those names. -/
 theorem Frame.setAll {c : List String} :
@@ -3700,7 +3741,7 @@ theorem Frame.setAll {c : List String} :
     exact (Frame.trans h1 h2).mono (fun n hn => (List.mem_append.mp hn).elim id id)
 
 /-- A global borrow copies its final maps back before the continuation runs. -/
-theorem borrowCallStmt_sim {env : Translate.Env} {sp cs ns : Span} {args : List Expr}
+theorem borrowCallStmt_sim {thr : Bool} {env : Translate.Env} {sp cs ns : Span} {args : List Expr}
     {rest : List Stmt} {tail : Tail} {fn : FnInfo} {indices : List Nat} {ts : List (Span × String)}
     {rb : IR.Body} {outs : List IR.Expr}
     (hc : CallsAgree (N := N) m.program fs fuel)
@@ -3713,19 +3754,25 @@ theorem borrowCallStmt_sim {env : Translate.Env} {sp cs ns : Span} {args : List 
     (hrest : StmtSim (N := N) m fs fuel env tail rest rb) :
     StmtSim (N := N) m fs fuel env tail
       (.exprStmt sp (.call cs (.ident ns fn.name) args) :: rest)
-      (.letBorrow (ts.map (·.2)) fn.ref indices outs rb) := by
-  refine rebind_sim m fs fuel (names := ts.map (·.2)) (by simp) (fun n hn => ?_)
+      (.letBorrow thr (ts.map (·.2)) fn.ref indices outs rb) := by
+  refine rebind_or_ret_sim m fs fuel (names := ts.map (·.2)) (by simp) (fun n hn => ?_)
     (fun ρs ρo o ha hs ho => ?_) hrest
   · obtain ⟨⟨ms, n'⟩, hm, rfl⟩ := List.mem_map.mp hn
     obtain ⟨i, hi⟩ := mem_borrowTargetsAt hts hm
     have hm' := List.mem_of_getElem? hi
     simp only [stmtChanges, hloc, List.mem_append]
     exact Or.inl (List.mem_filterMap.mpr ⟨_, hm', rfl⟩)
-  obtain ⟨vs, k, ps, body, params, after, inner, ρo₂, hmaps, hvs, rfl, hout, hlen, hparams, hnl,
-    hstate, hrun, hinner, hbs, hrb⟩ := exec_letBorrow ho
+  obtain ⟨vs, k, ps, body, params, r, hmaps, hvs, rfl, hout, hlen, hparams, hnl,
+    hstate, hrun, hcase⟩ := exec_letBorrow ho
   have hmapsS : Eval.holdMaps ρs (ts.map (·.2)) = true := by
     rw [holdMaps_congr ha]; exact hmaps
   have hfile := (hs.2.1 fn hfind).2 (by simp [hborrow])
+  rcases hcase with ⟨after, inner, ρo₂, rfl, hinner, hbs, hrb⟩ | ⟨t, rfl, rfl⟩
+  rotate_left
+  · exact Or.inr ⟨.error t, rfl, borrow_call_error_from_agreement m fs k hc ρs sp cs ns fn.name indices args
+      ts vs ps body params t (hargs ρs ρo vs ha hs hvs) (hs.none hglobal) hts hnd hmapsS
+      (by simpa [hfile] using hout) hparams hstate hlen hrun⟩
+  refine Or.inl ?_
   have hex := borrow_call_from_agreement m fs k hc ρs sp cs ns fn.name indices args ts vs
     ps body params after inner (hargs ρs ρo vs ha hs hvs) (hs.none hglobal) hts hnd hmapsS
     (by simpa [hfile] using hout) hparams hstate hlen hrun hinner

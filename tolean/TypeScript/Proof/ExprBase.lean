@@ -208,6 +208,7 @@ def callO (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat) (key : De
   | fuel + 1 => do
     let (params, body) ← fs.lookup key
     if params.length != vs.length then none
+    if body.returnedState.isSome then none
     match ← IR.Body.exec fs fuel (params.zip vs).reverse body with
     | .ret r => some r
     | .normal _ | .brk _ | .cont _ => none
@@ -230,6 +231,18 @@ structure CallsAgree (p : Eval.Program) (fs : List (DeclRef × List String × IR
       (Eval.borrowsOf ⟨p, key.file⟩).lookup key.name = some indices ∧
       Eval.execStmt ⟨p, key.file⟩ k (ps.zip vs).reverse source = some (.normal afterS) ∧
       ∀ q ∈ params, afterS.lookup q = after.lookup q
+  /-- A throw out of a borrowing function throws the same value in the
+  source. -/
+  borrowError : ∀ k, fuel = k + 1 → ∀ key ps body indices params (vs : List (Val N)) t,
+    fs.lookup key = some (ps, body) →
+    indices.mapM (ps[·]?) = some params →
+    body.returnedState = some params →
+    ps.length = vs.length →
+    IR.Body.exec fs k (ps.zip vs).reverse body = some (.ret (.error t)) →
+    ∃ source,
+      (Eval.functionsOf p).lookup key = some (ps, source) ∧
+      (Eval.borrowsOf ⟨p, key.file⟩).lookup key.name = some indices ∧
+      Eval.execStmt ⟨p, key.file⟩ k (ps.zip vs).reverse source = some (.ret (.error t))
 
 instance : CoeFun (CallsAgree (N := N) p fs fuel)
     (fun _ => ∀ key vs r, callO (N := N) fs fuel key vs = some r → callS p fuel key vs = some r) :=

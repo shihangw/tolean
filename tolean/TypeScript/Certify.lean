@@ -411,7 +411,7 @@ def bodyNames : IR.Body → List String
     name :: (bodyNames a ++ bodyNames b)
   | .letState _ branch rest => bodyNames branch ++ bodyNames rest
   | .fold _ _ body items rest _ => exprNames items ++ bodyNames body ++ bodyNames rest
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprNames ++ bodyNames rest
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest => args.flatMap exprNames ++ bodyNames rest
   | .letCall _ _ _ value _ _ _ body args rest =>
     exprNames value ++ bodyNames body ++ args.flatMap exprNames ++ bodyNames rest
   | .letLifted _ e rest => exprNames e ++ bodyNames rest
@@ -443,7 +443,7 @@ partial def bodyCallbacks : IR.Body → List Callback
   | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b | .letState _ a b => bodyCallbacks a ++ bodyCallbacks b
   | .fold _ _ body items rest _ => exprCallbacks items ++ bodyCallbacks body ++ bodyCallbacks rest
   | .throw e => exprCallbacks e
-  | .bind _ _ args rest | .letBorrow _ _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
+  | .bind _ _ args rest | .letBorrow _ _ _ _ args rest => args.flatMap exprCallbacks ++ bodyCallbacks rest
   | .letCall _ _ _ _ _ _ _ body args rest =>
     args.flatMap exprCallbacks ++ bodyCallbacks body ++ bodyCallbacks rest
   | .letLifted _ _ rest => bodyCallbacks rest
@@ -573,7 +573,7 @@ def hasTaggedConditionScope : IR.Body → Bool
   | .matchTag .. => true
   | .let _ _ rest | .letTuple _ _ rest | .letArray _ _ _ rest
   | .bind _ _ _ rest | .letCall _ _ _ _ _ _ _ _ _ rest | .letLifted _ _ rest
-  | .letBorrow _ _ _ _ rest =>
+  | .letBorrow _ _ _ _ _ rest =>
     hasTaggedConditionScope rest
   | .ite _ a b | .matchNull _ _ a b | .letState _ a b =>
     hasTaggedConditionScope a || hasTaggedConditionScope b
@@ -644,7 +644,7 @@ partial def loopsOf : IR.Body → List (List String × String × IR.Body × IR.L
   | .fold names element body items rest info => loopsOf body ++ [(names, element, body, info, items)] ++ loopsOf rest
   | .throw _ => []
   | .letCall _ _ _ _ _ _ _ body _ rest => loopsOf body ++ loopsOf rest
-  | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => loopsOf rest
+  | .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ _ rest => loopsOf rest
 
 /-- Nullish branches on the path to a loop, in outermost-first order. -/
 def loopGuards (span : Span) : IR.Body →
@@ -659,7 +659,7 @@ def loopGuards (span : Span) : IR.Body →
     if info.span == span then some []
     else (loopGuards span body).orElse fun _ => loopGuards span rest
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
-      .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest =>
+      .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ _ rest =>
     loopGuards span rest
   | .letCall _ _ _ _ _ _ _ body _ rest =>
     (loopGuards span body).orElse fun _ => loopGuards span rest
@@ -670,7 +670,7 @@ def closureReads : IR.Body → List (String × IR.Expr)
   | .handle a b => closureReads a ++ closureReads b
   | .value _ | .state _ | .yield .. | .done .. | .exit .. | .throw _ => []
   | .let _ _ rest | .letArray _ _ _ rest | .letTuple _ _ rest |
-    .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ rest => closureReads rest
+    .bind _ _ _ rest | .letLifted _ _ rest | .letBorrow _ _ _ _ _ rest => closureReads rest
   | .ite _ a b | .matchNull _ _ a b | .matchTag _ _ _ _ _ a b |
     .letState _ a b => closureReads a ++ closureReads b
   | .fold _ _ body _ rest _ => closureReads body ++ closureReads rest

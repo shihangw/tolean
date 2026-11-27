@@ -165,12 +165,13 @@ explains these restrictions and the future work.
 
 | TypeScript | Lean | Refused |
 |---|---|---|
-| A map borrow with an early return, several changed maps, an ordinary returned value, control flow or an imported callee | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
+| A map borrow with an early return, an ordinary returned value, control flow or an imported callee | A function that returns the changed maps, with its ordinary result when there is one. The caller binds the changed maps again. | A call where the caller keeps another name for the same map |
 
 The translator now accepts one changed Map parameter in a void function
 whose body contains only straight-line set, delete and forwarding calls
-with atomic arguments and an optional terminal bare return. The call copies
-the map in and back out, and `program_sound`
+with atomic arguments and an optional terminal bare return. The body may
+also call a function that throws, and the throw passes on to the caller.
+The call copies the map in and back out, and `program_sound`
 covers that call rule. The [TypeScript guide](../typescript/README.md#map-borrows)
 describes this case. The remaining cases need a wider call result, including
 the final parameter bindings when the callee returns or throws.
@@ -280,7 +281,8 @@ The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
 8. **P0.** Widen map borrows to early returns, an ordinary returned value,
-   control flow and imported callees. Several changed maps are done.
+   control flow and imported callees. Several changed maps and a throw out
+   of a called function are done.
 10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
     remaining computed list shapes, and direct sorts or conditioned helpers
     under enclosing nullable narrowing. Calls inside nullable matches are

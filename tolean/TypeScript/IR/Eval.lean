@@ -556,6 +556,9 @@ def Expr.evalCall (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ 
   | fuel + 1 =>
     let (params, body) ← fs.lookup ref
     if params.length != vs.length then none
+    -- A body that ends in a state is a map borrow, which only `letBorrow`
+    -- may call.
+    if body.returnedState.isSome then none
     match ← Body.exec fs fuel (params.zip vs).reverse body with
     | .ret r => some r
     | .normal _ | .brk _ | .cont _ => none
@@ -724,7 +727,7 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
         | true, .ret (.ok w) => callResult names w
         | _, _ => none
       Body.exec fs (k + 1) (← bindState names inner ρ) rest
-  | .letBorrow names ref indices args rest => do
+  | .letBorrow _ names ref indices args rest => do
     if !Eval.holdMaps ρ names then none
     let vs ← Expr.evalList fs fuel ρ args
     let fuel + 1 := fuel | none
@@ -733,8 +736,10 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     let ps ← indices.mapM (params[·]?)
     if names.length != ps.length then none
     if body.returnedState != some ps then none
-    let .normal after ← Body.exec fs fuel (params.zip vs).reverse body | none
-    Body.exec fs (fuel + 1) (← bindState names (← Eval.borrowedMaps after (names.zip ps)) ρ) rest
+    match ← Body.exec fs fuel (params.zip vs).reverse body with
+    | .normal after => Body.exec fs (fuel + 1) (← bindState names (← Eval.borrowedMaps after (names.zip ps)) ρ) rest
+    | .ret (.error t) => some (.ret (.error t))
+    | _ => none
   | .letLifted name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none
@@ -767,6 +772,8 @@ def callIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : 
     (fuel : Nat := 64) : Option (Except (Val N) (Val N)) := do
   let (params, body) ← fs.lookup key
   if params.length != args.length then none
+  -- Only `letBorrow` may call a map borrow.
+  if body.returnedState.isSome then none
   match ← Body.exec fs fuel (params.zip args).reverse body with
   | Outcome.ret r => some r
   | Outcome.normal _ | Outcome.brk _ | Outcome.cont _ => none

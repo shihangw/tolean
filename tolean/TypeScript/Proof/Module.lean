@@ -309,12 +309,16 @@ theorem borrowLocals_has (env : Env) (param : Option (List String)) (x : String)
 theorem checkBorrowResult_ok {sp : Span} {b : Option (List Nat)} {name : String}
     {bs : List (String × List Nat)} {param : Option (List String)} {out : IR.Body} {s s' : Ctx} {u : Unit}
     (h : checkBorrowResult sp b name bs param out s = .ok u s') :
-    s' = s ∧ (b = none ∨ ∃ i n, b = some i ∧ param = some n ∧
+    s' = s ∧ ((b = none ∧ out.returnedState = none) ∨ ∃ i n, b = some i ∧ param = some n ∧
       bs.lookup name = some i ∧ out.returnedState = some n) := by
   cases b with
   | none =>
-    simp only [checkBorrowResult, pure_ok] at h
-    exact ⟨h.2.symm, .inl rfl⟩
+    simp only [checkBorrowResult, ite_state] at h
+    split at h
+    · simp only [pure_ok] at h
+      rename_i hc
+      exact ⟨h.2.symm, .inl ⟨rfl, by simpa using hc⟩⟩
+    · exact absurd h (reject_ne_ok _ _ _ _ _)
   | some i =>
     cases param with
     | none => simp [checkBorrowResult] at h
@@ -344,7 +348,7 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
           (∀ x, env.has x = decide (x ∈ params.map (·.name))) ∧
           ((tail = .ret ∧
             Stmt.ownsChangesBorrow s.borrows (params.map (·.name))
-              (Eval.preparedBody thr cls guards params ret body) = true) ∨
+              (Eval.preparedBody thr cls guards params ret body) = true ∧ out.returnedState = none) ∨
             ∃ indices ps, tail = .state ps ∧ s.borrows.lookup name = some indices ∧
               indices.mapM ((params.map (·.name))[·]?) = some ps ∧ out.returnedState = some ps) := by
   unfold translateFunction at h
@@ -398,8 +402,7 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
     obtain ⟨r, s₆, hr, _, s₇, rfl, _, _, ⟨rfl, rfl⟩, out, s₈, hbody, _, s₈', hborrow, h⟩ := h
     obtain ⟨rfl, hmode⟩ := checkBorrowResult_ok hborrow
     generalize hb : (if tps.isEmpty then
-      borrowCandidate? params (some returnType)
-        (Eval.preparedBody thr cls guards params (some returnType) body) else none) = borrow at h hbody hmode hr
+      borrowCandidate? params (some returnType) body else none) = borrow at h hbody hmode hr
     generalize hp : (borrow.bind fun is => is.mapM fun i => (params[i]?).map (·.name)) = param at h hbody hmode
     -- The check that a call of the function itself passes a part of a
     -- parameter only refuses.
@@ -425,11 +428,10 @@ theorem translateFunction_ok {thr : String → Bool} {cls : String → Option (O
       rw [hbhas]
       simp only [Env.has, Env.lookup] at hx ⊢
       rw [hx]; simp
-    · rcases hmode with hnone | ⟨i, n, hi, hn, hsig, hstate⟩
+    · rcases hmode with ⟨hnone, hrs⟩ | ⟨i, n, hi, hn, hsig, hstate⟩
       · rw [hnone] at hp
         simp only [Option.bind_none] at hp
-        refine .inl ⟨by simp [← hp], ?_⟩
-        simpa [hnone] using hown
+        refine .inl ⟨by simp [← hp], by simpa [hnone] using hown, hrs⟩
       · refine .inr ⟨i, n, by simp [hn], hsig, ?_, hstate⟩
         rw [hi] at hp
         simpa [hn, List.getElem?_map] using hp
@@ -1306,7 +1308,7 @@ theorem translateDecls_ok {m : Module} {s s' : Ctx} {ds : List IR.Decl}
     ∃ shapes pre s₁ os,
       translateErrorTypes m { inlineStart m s with inlineStructs := shapes } = .ok pre s₁ ∧
       m.decls.mapM
-        (translateDeclWithInline (Eval.mayThrow m) (Eval.errorClassOf m) (Eval.guardTests m) s₁.errorClasses)
+        (translateDeclWithInline (Eval.hoistThrows m) (Eval.errorClassOf m) (Eval.guardTests m) s₁.errorClasses)
         s₁ = .ok os s' ∧
       IR.functions ds = IR.functions (pre ++ os.filterMap id) := by
   simp only [translateDecls, bind_ok, modify_ok] at h
@@ -1726,7 +1728,7 @@ def FnRelIn (F : List FnInfo) (E : List EnumValue) (C : List ClassInfo) (B : Lis
     (∃ tail Fu env c c', translateStatements Fu env tail (blockStatements src.2.2) c = .ok out.2.2 c' ∧
       (∀ g ∈ env.functions, g ∈ F) ∧ (∀ e ∈ env.enums, e ∈ E) ∧ (∀ k ∈ env.classes, k ∈ C) ∧
       (∀ x, env.has x = decide (x ∈ src.2.1)) ∧
-      ((tail = .ret ∧ Stmt.ownsChangesBorrow B src.2.1 src.2.2 = true) ∨
+      ((tail = .ret ∧ Stmt.ownsChangesBorrow B src.2.1 src.2.2 = true ∧ out.2.2.returnedState = none) ∨
         ∃ indices ps, tail = .state ps ∧ B.lookup src.1 = some indices ∧
           indices.mapM (src.2.1[·]?) = some ps ∧ out.2.2.returnedState = some ps))
 
@@ -1934,7 +1936,7 @@ theorem module_resolves {p : Eval.Program} {file : String} {m : Module} (hp : p.
       obtain ⟨rfl, -, rfl⟩ := hsel
       exact ⟨_, _, _, _, _, _, hd⟩
     · rintro ⟨sp, ex, tps, ps, r, b, hd⟩
-      exact ⟨(f.name, ps.map (·.name), Eval.preparedBody (Eval.mayThrow m) (Eval.errorClassOf m)
+      exact ⟨(f.name, ps.map (·.name), Eval.preparedBody (Eval.hoistThrows m) (Eval.errorClassOf m)
         (Eval.guardTests m) ps r b), ⟨_, hd, rfl⟩, rfl⟩
   unfold Eval.resolve
   simp only [hp, Option.bind_eq_bind, Option.bind_some]
@@ -2065,7 +2067,8 @@ def FnRelP (p : Eval.Program) (src : DeclRef × List String × Stmt)
     (∃ tail Fu env c c', translateStatements Fu env tail (blockStatements src.2.2) c = .ok out.2.2 c' ∧
       Resolves ⟨p, src.1.file⟩ env ∧ (∀ x, env.has x = decide (x ∈ src.2.1)) ∧
       ((tail = .ret ∧
-          Stmt.ownsChangesBorrow (Eval.borrowsOf ⟨p, src.1.file⟩) src.2.1 src.2.2 = true) ∨
+          Stmt.ownsChangesBorrow (Eval.borrowsOf ⟨p, src.1.file⟩) src.2.1 src.2.2 = true ∧
+          out.2.2.returnedState = none) ∨
         ∃ indices ps, tail = .state ps ∧
           (Eval.borrowsOf ⟨p, src.1.file⟩).lookup src.1.name = some indices ∧
           indices.mapM (src.2.1[·]?) = some ps ∧ out.2.2.returnedState = some ps))
@@ -2123,29 +2126,12 @@ theorem scoped_params {m : Eval.Scope} {env : Translate.Env} {ps : List String} 
 
 variable (p : Eval.Program) (fs : List (DeclRef × List String × IR.Body))
 
-theorem returnedState_not_ret (fuel : Nat) (ρ : Eval.Env N) (b : IR.Body)
-    {names : List String} (hs : b.returnedState = some names)
-    (v : Except (Val N) (Val N)) :
-    IR.Body.exec fs fuel ρ b ≠ some (.ret v) := by
-  cases b <;> simp only [IR.Body.returnedState, reduceCtorEq] at hs
-  case state ns => simp [IR.Body.exec]
-  case «let» n e rest =>
-    simp only [IR.Body.exec]
-    cases he : IR.Expr.eval fs fuel ρ e with
-    | none => simp
-    | some w =>
-      exact returnedState_not_ret fuel ((n, w) :: ρ) rest hs v
-  case letBorrow ns ref indices args rest =>
-    intro hex
-    obtain ⟨_, _, _, _, _, _, _, ρ₂, _, _, _, _, _, _, _, _, _, _, _, hrest⟩ := exec_letBorrow hex
-    exact returnedState_not_ret fuel ρ₂ rest hs v hrest
-
 mutual
 /-- Every call of the output gives what the same call of the source gives,
 for every fuel. -/
 theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
     ∀ fuel, CallsAgree (N := N) p fs fuel
-  | 0 => ⟨fun key vs v h => by simp [callO] at h, fun k hk => by omega⟩
+  | 0 => ⟨fun key vs v h => by simp [callO] at h, fun k hk => by omega, fun k hk => by omega⟩
   | fuel + 1 => by
     have hc : ∀ k ≤ fuel, CallsAgree (N := N) p fs k := fun k hk => calls_agree hrel k
     constructor
@@ -2192,6 +2178,19 @@ theorem calls_agree (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) :
           refine ⟨.block sp ss, mod, hlS, hsig, ?_, hmod⟩
           rw [execStmt_block, hrun]
           simp [hf.length]
+    · intro k hk key ps b indices params vs t hl hp hstate hlen hex
+      have hsame : k = fuel := by omega
+      subst k
+      obtain ⟨bS, hlS, -, -, hnd, tail, F, env, ctx, ctx', htr, hres, henv, hmode⟩ := lookup_rel hrel hl
+      have hsim := (stmts_sound ⟨p, key.file⟩ fs F fuel hc).1 _ _ _ _ _ _ htr
+      have hrun := (hsim _ _ (fun _ => rfl) (scoped_params henv hres hlen)).1 _ hex
+      rcases hmode with ⟨rfl, hown, hnone⟩ | ⟨is, qs, rfl, hsig, hparams, hreturned⟩
+      · simp [hnone] at hstate
+      · have heq : params = qs := by simpa [hstate] using hreturned
+        subst qs
+        have hi : is = indices := mapM_getElem?_inj hnd hparams hp
+        subst is
+        exact ⟨bS, hlS, hsig, block_ret ⟨p, key.file⟩ fuel bS hrun⟩
 
 theorem calls_agree_ordinary
     (hrel : Forall₂ (FnRelP p) (Eval.functionsOf p) fs) (fuel : Nat)
@@ -2207,6 +2206,9 @@ theorem calls_agree_ordinary
       split at h
       · simp at h
       · rename_i hlen
+        split at h
+        · simp at h
+        rename_i hnostate
         cases hb : IR.Body.exec fs fuel (ps.zip vs).reverse b with
         | none => simp [hb] at h
         | some o =>
@@ -2220,9 +2222,9 @@ theorem calls_agree_ordinary
             have hsim := (stmts_sound ⟨p, key.file⟩ fs F fuel hc).1 _ _ _ _ _ _ htr
             have hex := (hsim _ _ (fun _ => rfl) (scoped_params henv hres hlen')).1 w hb
             have hst := block_ret ⟨p, key.file⟩ fuel bS hex
-            rcases hmode with ⟨rfl, hown⟩ | ⟨i, n, rfl, hsig, hp, hstate⟩
+            rcases hmode with ⟨rfl, hown, -⟩ | ⟨i, n, rfl, hsig, hp, hstate⟩
             · simp [callS, hlS, hlen', hst, hown]
-            · exact (returnedState_not_ret fs fuel _ b hstate w hb).elim
+            · simp [hstate] at hnostate
 end
 
 end Calls
@@ -2352,7 +2354,7 @@ theorem programTranslation_rel {p : Eval.Program} {outs : List (String × List I
     have hev0 : s₁.enumValues = [] := hev₁.trans hev0
     have hifaces : s₁.interfaces = ifaces := hi₁.trans hifaces
     obtain ⟨hf, hi, ⟨more, hfns', hex, horig⟩, -, hnames, hrelm⟩ :=
-      decls_ok P (Eval.mayThrow m) (Eval.errorClassOf m) s₁.errorClasses m.decls s₁ finish os
+      decls_ok P (Eval.hoistThrows m) (Eval.errorClassOf m) s₁.errorClasses m.decls s₁ finish os
         (by rw [hifaces]; exact hEnums) hos
     rw [hfns, List.nil_append] at hfns'
     have hresC : ∀ c ∈ s₁.errorClasses, ClassAgrees ⟨P, file⟩ c := by
