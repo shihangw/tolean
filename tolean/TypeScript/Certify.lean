@@ -1057,7 +1057,9 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
             let binders := " ".intercalate (formals.map fun (p, t) => s!"({p} : {t.print names})")
             let arguments := " ".intercalate (actuals.map fun e => s!"({e.print names})")
             childConditions := childConditions ++ [guardCondition r guards s!"((fun {binders} => {condition}) {arguments})"]
-      unless childConditions.isEmpty || (method matches .list .map | .list .filter) do
+      unless childConditions.isEmpty ||
+          (method matches .list .map | .list .filter | .list .any | .list .find | .list .all |
+            .list .findIndex) do
         throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
       if comparesNumbers cbBody || !childConditions.isEmpty then
         let outerScope := match parent, enclosingLoop with
@@ -1373,7 +1375,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         | .findIndex => ("", " 0", "x")
         | _ => ("", "", "x")
       if !childConditions.isEmpty then
-        unless method == .map || method == .filter do
+        unless method matches .map | .filter | .any | .find | .all | .findIndex do
           throw s!"{file}: sort conditions in this callback need an element-restricted link lemma in {name}"
         let predicate := " ∧ ".intercalate (childConditions.map fun c => s!"({c})")
         let abstracted := s!"(fun ({param} : {elem.print names}) " ++
@@ -1401,9 +1403,14 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
           if r.idents.contains hn then throw s!"{file}: reserved certificate hypothesis name {hn}"
           obligations := obligations ++ [(hn, condition)]
           inputConditions := inputConditions ++ [condition]
-        let restricted := if method == .map then
-          s!"evalMap_map_on fs {fuel} ρ {str param} _ {encX} {encY} {fn}"
-          else s!"evalFilter_filter_on fs {fuel} ρ {str param} _ {encX} {fn}"
+        -- Each lemma here needs the callback to agree with `fn` only on the
+        -- elements of the list, which the sort conditions describe.
+        let restricted := match method with
+          | .map => s!"evalMap_map_on fs {fuel} ρ {str param} _ {encX} {encY} {fn}"
+          | .any | .find => s!"evalFind_true_on fs {fuel} ρ {str param} _ {encX} {fn}"
+          | .all => s!"evalFind_false_on fs {fuel} ρ {str param} _ {encX} {fn}"
+          | .findIndex => s!"evalFindIdx_findIdx_on fs {fuel} ρ {str param} _ {encX} {fn}"
+          | _ => s!"evalFilter_filter_on fs {fuel} ρ {str param} _ {encX} {fn}"
         let unpackKeys := hypNames.foldl (fun text h => text.replace s!"at {h} ⊢" s!"at {h} hkeys ⊢") unpack
         let vars := ("x", elem) :: scope.zipIdx.map fun ((_, t), i) => (s!"v{i}", t)
         let rewrites := if conditionalLemmas.isEmpty then "" else
@@ -1414,7 +1421,7 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
         thms := thms.push <|
           s!"theorem {lemmaName} {functionGeneric} (fs : List (tolean.DeclRef × List String × tolean.TypeScript.IR.Body)){hfs}\n" ++
           s!"    (fuel : Nat) (ρ : Env {nv}){hI} (items : {itemsTy}) (hkeys : ∀ x ∈ items, {applied}) :\n" ++
-          s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody})\n" ++
+          s!"    tolean.TypeScript.IR.Expr.{evalFn} fs {fuel} ρ {str param} ({term cbBody}){want}{start}\n" ++
           s!"      (List.map {encX} items) = some ({result}) := by\n" ++
           s!"  refine tolean.TypeScript.Proof.{restricted} items ?_\n" ++
           "  intro x hx\n" ++ substHfs ++ unpackKeys ++
@@ -1872,7 +1879,10 @@ def certify (file source leanModule transNs certNs : String) (target : Edition :
     let conditionRewrites := if conditionalLemmas.isEmpty then "" else
       "\n  all_goals repeat' first\n" ++ String.join (conditionalLemmas.map fun lemma =>
         s!"    | rw [{lemma}]\n") ++
-      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)"
+      s!"  all_goals (try simp_all [{simpSet}])\n  all_goals first | assumption | rfl | (intros; first | rfl | simp_all)" ++
+      -- `simp_all` states a `find` that found nothing as a fact about every
+      -- element, so the goal's `List.find?` needs that fact turned back.
+      " | (rename_i h; rw [List.find?_eq_none.mpr (fun x hx => by simp [h x hx])]; rfl)"
     let functionLoopLemmas := loopLemmas.toList.drop functionLoopLemmasStart
     let functionPostLoopLemmas := functionLoopLemmas
     let stagedSimpSet := ", ".intercalate

@@ -488,16 +488,19 @@ parameters. Lists that are not reachable from parameters remain refused.
 Calls may also occur in conditionals, in local initializers, or as the input
 of a later array method. Each call adds the callee's condition over its
 actual arguments. A condition is required even for a branch that the call
-does not take. Inside `map` and `filter`, each sort condition quantifies over
-the elements of that callback's input. This works for nested maps, captured
+does not take. Inside `map`, `filter`, `some`, `every`, `find` and
+`findIndex`, each sort condition quantifies over the elements of that
+callback's input. This works for nested maps, captured
 parameter lists and calls to functions that sort. The callback proof assumes
 the condition only for its current element. A `for … of` loop similarly
 carries key conditions in its environment invariant. The condition applies
 to the current input element and captured inputs, including in nested loops
 and loops with `break` or `return`. The result may accumulate sorted lists.
 Sorts of changing loop state or body-local lists remain refused because their
-conditions need a preservation proof. Other callback methods still need
-corresponding element or state conditions.
+conditions need a preservation proof. A call with sort conditions inside
+`findLast`, `reduce` or a `map` that reads the index remains refused. The
+callback of `findLast` sees a reversed list, and the other two see an index
+or an accumulator that an element condition does not describe.
 Sort expressions may likewise appear in conditionals, local initializers
 and as inputs of later array methods. Their list inputs may come from `map`,
 `filter`, `slice`, a conditional or a call. The precondition concerns the

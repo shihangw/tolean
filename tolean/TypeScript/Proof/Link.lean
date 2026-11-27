@@ -360,6 +360,69 @@ theorem evalFind_false {α : Type} (fs : List (DeclRef × List String × IR.Body
       some ((xs.find? fun x => !p x).map encX) := by
   simpa using evalFind_find fs fuel ρ param body encX p false hb xs
 
+/-- Finding needs agreement only on the input elements. -/
+theorem evalFind_find_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool) (want : Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    IR.Expr.evalFind fs fuel ρ param body want (xs.map encX) =
+      some ((xs.find? fun x => p x == want).map encX) := by
+  induction xs with
+  | nil => simp [IR.Expr.evalFind]
+  | cons x xs ih =>
+    simp only [List.mem_cons, forall_eq_or_imp] at hb
+    simp only [List.map_cons, IR.Expr.evalFind, hb.1, Option.bind_eq_bind, Option.bind_some,
+      List.find?_cons]
+    cases p x == want
+    · simp [ih hb.2]
+    · simp
+
+/-- `find` and `some` need agreement only on the input elements. -/
+theorem evalFind_true_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    IR.Expr.evalFind fs fuel ρ param body true (xs.map encX) = some ((xs.find? p).map encX) := by
+  simpa using evalFind_find_on fs fuel ρ param body encX p true xs hb
+
+/-- `every` needs agreement only on the input elements. -/
+theorem evalFind_false_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    IR.Expr.evalFind fs fuel ρ param body false (xs.map encX) =
+      some ((xs.find? fun x => !p x).map encX) := by
+  simpa using evalFind_find_on fs fuel ρ param body encX p false xs hb
+
+/-- `findIndex` needs agreement only on the input elements. -/
+theorem evalFindIdx_from_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    ∀ start : Nat, IR.Expr.evalFindIdx fs fuel ρ param body start (xs.map encX) =
+      some ((xs.findIdx? p).map (· + start)) := by
+  induction xs with
+  | nil => intro start; simp [IR.Expr.evalFindIdx]
+  | cons x xs ih =>
+    intro start
+    simp only [List.mem_cons, forall_eq_or_imp] at hb
+    simp only [List.map_cons, IR.Expr.evalFindIdx, hb.1, Option.bind_eq_bind, Option.bind_some,
+      List.findIdx?_cons]
+    cases p x
+    · simp only [Bool.false_eq_true, if_false, ih hb.2 (start + 1), Option.map_map]
+      have key : (fun k => k + (start + 1)) = ((fun k => k + start) ∘ fun i => i + 1) := by
+        funext k; simp only [Function.comp_apply]; omega
+      simp [key]
+    · simp
+
+/-- The same from the first element. -/
+theorem evalFindIdx_findIdx_on {α : Type} (fs : List (DeclRef × List String × IR.Body)) (fuel : Nat)
+    (ρ : Eval.Env N) (param : String) (body : IR.Expr) (encX : α → Val N) (p : α → Bool)
+    (xs : List α)
+    (hb : ∀ x ∈ xs, IR.Expr.eval fs fuel ((param, encX x) :: ρ) body = some (.bool (p x))) :
+    IR.Expr.evalFindIdx fs fuel ρ param body 0 (xs.map encX) = some (xs.findIdx? p) := by
+  simpa using evalFindIdx_from_on fs fuel ρ param body encX p xs hb 0
+
 /-- `some` is `List.any`. -/
 @[simp] theorem find?_isSome {α : Type} (p : α → Bool) (xs : List α) :
     (xs.find? p).isSome = xs.any p := by
