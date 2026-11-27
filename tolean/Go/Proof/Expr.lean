@@ -932,6 +932,30 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
                 rw [hev, he]
                 exact outcome_then (by simp [Eval.applyBuiltin, outcome_nil])
               · simp [htc] at h
+            | convert u =>
+              -- A conversion to a type of the package over `int`, `int64`
+              -- or `bool` keeps the value.
+              have hu : u ≠ "string" → Eval.applyBuiltin (.convert u) v = some v := by
+                intro hu; simp [Eval.applyBuiltin, hu]
+              have hok : ∀ t', (match basicType u with
+                  | some .int => if tc.isNum then pure (ca, Ty.int) else reject sp "the subset converts only integers to an integer type"
+                  | some .int64 => if tc.isNum then pure (ca, Ty.int64) else reject sp "the subset converts only integers to an integer type"
+                  | some .bool => if tc = .bool then pure (ca, Ty.bool) else reject sp "the subset converts only a bool to a bool type"
+                  | _ => reject sp s!"the subset leaves out conversions to '{f}'" : TM (IR.Expr × Ty)) = .ok (c, t') →
+                  c = ca ∧ u ≠ "string" := by
+                intro t' h'
+                cases hb : basicType u with
+                | none => simp [hb] at h'
+                | some bt =>
+                  have hs : u ≠ "string" := by
+                    rintro rfl; simp [basicType] at hb; subst hb; simp [basicType, reject, throw, throwThe, MonadExceptOf.throw] at h'
+                  cases bt <;> simp [hb] at h' <;> (try split at h') <;>
+                    simp_all [pure_ok]
+              obtain ⟨rfl, hus⟩ := hok t h
+              obtain ⟨ds, hds, hint, he⟩ := ihe env arg c tc hca ρs ρo v ha hs hv
+              refine ⟨ds ++ [], by simpa using hds, checkVals_append hint checkVals_nil, ?_⟩
+              rw [hev, he]
+              exact outcome_then (by simp [hu hus, outcome_nil])
           | [], h => simp [hf, hp, hbi] at h
           | _ :: _ :: _, h => simp [hf, hp, hbi] at h
         | none =>

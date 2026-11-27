@@ -107,6 +107,20 @@ every package-level `var`, keep the function on the string translation. The
 [decision record](../decisions/2026-11-26-go-package-constants.md) gives the
 reasons, and the corpus package `consts` shows the output.
 
+A pure function may also use a type that the package declares over `int`,
+`int64`, `bool` or `string`, such as `type Celsius int` or the alias
+`type Count = int64`, for its parameters, results, locals and constants. It
+may convert a value to such a type over `int`, `int64` or `bool`, as in
+`Celsius(x)`, and back with `int(c)` or `int64(c)`. A conversion keeps the
+value, so the output uses the underlying type, `Int` or `Bool`, and writes the
+operand alone. Go's type checker keeps `Celsius` apart from `int`, so the
+translator reads only programs that `go build` accepts. A conversion to a
+type over `string` keeps the function on the string translation, because
+Go turns an integer converted to a string type into a code point. A type
+over another type of the package or over a composite type does too. The
+[decision record](../decisions/2026-11-26-go-named-types.md) gives the
+reasons, and the corpus package `named` shows the output.
+
 An `if` may have an init statement, as in `if d := x - y; d > 0 { … }`. A
 `switch` may have a tag or none, an init statement, several values in one
 case, and a `default` clause anywhere in its body. The translator writes a

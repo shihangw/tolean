@@ -45,11 +45,14 @@ private def refused (consts body : String) : Bool :=
 -- A constant divisor: zero is refused, and another one needs no test.
 #guard check "const D = 3" "return x / D" 10 3
 #guard refused "const D = 0" "return x / D"
--- Forms that leave the subset: iota, a constant from another constant, a
--- constant of a named type, and one too large for int64.
+-- A constant of a type of the package over int. NamedTypes.lean has more.
+#guard check "type T int\nconst A T = 2" "return x + int(A)" 1 3
+-- A constant of a type over another type of the package.
+#guard refused "type T int\ntype U T\nconst A U = 2" "return x + int(A)"
+-- Forms that leave the subset: iota, a constant from another constant, and
+-- one too large for int64.
 #guard refused "const (\n  A = iota\n  B\n)" "return x + B"
 #guard refused "const A = 2\nconst B = A" "return x + B"
-#guard refused "type T int\nconst A T = 2" "return x + A"
 #guard refused "const Big = 9223372036854775808" "return x + Big"
 -- A package-level `var` stays on the string path.
 #guard refused "var V = 2" "return x + V"

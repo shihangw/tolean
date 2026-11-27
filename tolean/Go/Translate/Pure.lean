@@ -143,17 +143,26 @@ def takenNames : List String :=
 
 def nameOK (name : String) : Bool := !takenNames.contains name
 
+/-- The type of the subset that a predeclared type name names. -/
+def basicType : String → Option Ty
+  | "int" => some .int
+  | "int64" => some .int64
+  | "bool" => some .bool
+  | "string" => some .string
+  | _ => none
+
 /-- The type that a type expression names: a predeclared type, unless the
-package declares the name. -/
+package declares the name, or a type of the package over a predeclared type.
+Such a type is its underlying type here. Go's type checker keeps the two
+apart, and a value of either has the same representation, so the output
+uses the underlying type. -/
 def resolveType (ctx : Ctx) : Expr → Option Ty
   | .ident _ name =>
+    match ctx.program.types.lookup name with
+    | some u => basicType u
+    | none =>
     if ctx.program.names.contains name then none
-    else match name with
-      | "int" => some .int
-      | "int64" => some .int64
-      | "bool" => some .bool
-      | "string" => some .string
-      | _ => none
+    else basicType name
   | _ => none
 
 /-- The zero value of a type, as code. -/
@@ -407,6 +416,12 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
           | .len => if t = .string then pure (.ext .byteLen [c], .int) else reject sp "the subset takes len only of a string"
           | .toInt => if t.isNum then pure (c, .int) else reject sp "the subset converts only integers"
           | .toInt64 => if t.isNum then pure (c, .int64) else reject sp "the subset converts only integers"
+          | .convert u =>
+            match basicType u with
+            | some .int => if t.isNum then pure (c, .int) else reject sp "the subset converts only integers to an integer type"
+            | some .int64 => if t.isNum then pure (c, .int64) else reject sp "the subset converts only integers to an integer type"
+            | some .bool => if t = .bool then pure (c, .bool) else reject sp "the subset converts only a bool to a bool type"
+            | _ => reject sp s!"the subset leaves out conversions to '{f}'"
         | _ => reject sp s!"'{f}' takes one argument"
       | none => do
         let some sig := ctx.known.find? (·.name == f) | reject sp s!"'{f}' is not a pure function translated before this one"

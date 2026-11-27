@@ -203,9 +203,11 @@ def indexString : Val → Val → Res Val Val
   | _, _ => none
 
 /-- A predeclared function of the subset: `len`, and the conversions to
-`int` and `int64`. -/
+`int` and `int64`. `convert u` is a conversion to a type of the package whose
+underlying type is the predeclared type `u`. -/
 inductive Builtin where
   | len | toInt | toInt64
+  | convert (u : String)
 deriving DecidableEq, Repr
 
 /-- A predeclared function on the value of its argument. `len` of a string is
@@ -220,6 +222,14 @@ def applyBuiltin : Builtin → Val → Option Val
   | .len, _ => none
   | .toInt, v => some v
   | .toInt64, v => some v
+  -- A conversion to a type with the same underlying type keeps the value
+  -- (Go specification, "Conversions"). An integer converted to a string
+  -- type is the UTF-8 encoding of a code point, which the subset leaves out.
+  | .convert u, v =>
+    if u == "string" then match v with
+      | .str s => some (.str s)
+      | _ => none
+    else some v
 
 /-- A unary operator on the value of its operand. `-` wraps, as `0 - x`
 does. -/
@@ -333,6 +343,9 @@ structure Program where
   /-- Each package-level constant that the subset models: its name, its type
   when the declaration names one, and its value. -/
   consts : List (String × Option Expr × Val) := []
+  /-- Each type that the package declares over a predeclared type, such as
+  `type Celsius int`: its name and the name of the predeclared type. -/
+  types : List (String × String) := []
 
 /-- The names of the parameters, in order. A parameter without a name, as in
 `func f(int) int`, still takes an argument, and its name is `_`, which no
@@ -378,6 +391,9 @@ def predeclared (p : Program) (name : String) : Option Val :=
 /-- The predeclared function that the name `f` calls, unless the package
 declares the name (Go specification, "Predeclared identifiers"). -/
 def builtin (p : Program) (f : String) : Option Builtin :=
+  match p.types.lookup f with
+  | some u => some (.convert u)
+  | none =>
   if p.names.contains f then none
   else match f with
     | "len" => some .len
@@ -414,11 +430,29 @@ def declConsts (names : List String) : Decl → List (String × Option Expr × V
     | _ => none
   | _ => []
 
+/-- The predeclared types that a type of the package may have as its
+underlying type. -/
+def basicTypes : List String := ["int", "int64", "bool", "string"]
+
+/-- The types of one top-level declaration that the subset models (Go
+specification, "Type declarations"): a type definition or alias over a
+predeclared type, such as `type Celsius int`, when the package does not
+declare the predeclared name. Its underlying type is that predeclared type.
+A type over another type of the package, or over a composite type, leaves the
+subset. -/
+def declTypes (names : List String) : Decl → List (String × String)
+  | .gen (.mk _ "type" specs) => specs.filterMap fun
+    | .type _ x (.ident _ u) _ =>
+      if basicTypes.contains u && !names.contains u then some (x, u) else none
+    | _ => none
+  | _ => []
+
 /-- The program of the declarations of a package's files. -/
 def program (decls : List Decl) : Program where
   funcs := decls.filterMap funcOf
   names := decls.flatMap declNames
   consts := decls.flatMap (declConsts (decls.flatMap declNames))
+  types := decls.flatMap (declTypes (decls.flatMap declNames))
 
 /-- The value of a package-level name that no variable hides: a constant of
 the package, or a predeclared name that the package does not declare (Go
@@ -428,9 +462,20 @@ def global (p : Program) (name : String) : Option Val :=
   | some (_, v) => some v
   | none => predeclared p name
 
-/-- The zero value of a type (Go specification, "The zero value"). -/
+/-- The zero value of a predeclared type of the subset. -/
+def zeroOfBasic : String → Option Val
+  | "int" | "int64" => some (.int 0)
+  | "bool" => some (.bool false)
+  | "string" => some (.str "")
+  | _ => none
+
+/-- The zero value of a type (Go specification, "The zero value"). A type
+of the package has the zero value of its underlying type. -/
 def zeroOf (p : Program) : Expr → Option Val
   | .ident _ name =>
+    match p.types.lookup name with
+    | some u => zeroOfBasic u
+    | none =>
     if p.names.contains name then none
     else match name with
       | "int" | "int64" => some (.int 0)
