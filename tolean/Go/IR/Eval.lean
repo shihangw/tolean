@@ -9,7 +9,11 @@ values of the interpreter in `Spec/Eval.lean`.
 Each constructor of `IR.Expr` and `IR.Body` is one form of Lean code. The
 evaluator gives it the value that the printed Lean computes, written as a Go
 value: an `Int` is `Val.int`, a `Bool` is `Val.bool` and a `String` is
-`Val.str`. A `Prop` such as `a < b` has the value of its `decide`. A `let`
+`Val.str`. A `Prop` such as `a < b` has the value of its `decide`.
+`Int.tdiv` and `Int.tmod` are total, as in Lean: a zero divisor gives `0`
+and the dividend. The translator tests the divisor before it divides, and
+`throw` of the message gives the outcome `panic`, as `Except.error` does. A
+`let`
 adds a binding in front, as Lean's shadowing does, and `let (x, y) := …`
 gives `x` and `y` their new values.
 
@@ -17,8 +21,8 @@ The evaluator gives a value only to the forms that the Go translator writes.
 It gives none to the others, so no theorem says anything about them.
 
 `translate_sound` in `Proof/Package.lean` proves one direction for every
-function that the translator accepts: when this evaluator gives a value for a
-call, the interpreter gives the same value. So this file is trusted to mean
+function that the translator accepts: when this evaluator gives a value or a
+panic for a call, the interpreter gives the same value or panic. So this file is trusted to mean
 what the printed Lean means, and to give a value where the printed Lean does.
 -/
 namespace tolean.Go.IR
@@ -35,6 +39,7 @@ def functions (decls : List Decl) : List (DeclRef × List String × Body) :=
 def ExprExt.apply : ExprExt → List Val → Option Val
   | .wrap64, [.int a] => some (.int (tolean.Go.wrap64 a))
   | .append, [.str a, .str b] => some (.str (a ++ b))
+  | .pure, [a] => some a
   | _, _ => none
 
 /-- The bindings that `let (x, y) := …` makes: each of `names`, with its value
@@ -45,10 +50,12 @@ def bindState (names : List String) (inner outer : Env) : Option Env :=
     let v ← inner.lookup n
     return if (ρ.lookup n).isSome then Eval.Env.set ρ n v else (n, v) :: ρ) outer
 
-/-- Go's current statement outcomes embed in the shared loop control type. -/
-def loopOutcome : Outcome → tolean.Core.Loop.Outcome Env Val
+/-- Go's statement outcomes embed in the shared loop control type. A return
+and a panic both end the loop, as `.ok` and `.error` of its return value. -/
+def loopOutcome : Outcome → tolean.Core.Loop.Outcome Env (Except Val Val)
   | .normal env => .normal env
-  | .ret value => .ret value
+  | .ret value => .ret (.ok value)
+  | .panic value => .ret (.error value)
 
 mutual
 
@@ -74,8 +81,12 @@ def Expr.eval (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       if params.length != vs.length then none
       match ← Body.exec fs fuel (params.zip vs).reverse body with
       | .ret v => some v
-      | .normal _ => none
+      | _ => none
   | .intOp op a b => do
+    let .int x ← Expr.eval fs fuel ρ a | none
+    let .int y ← Expr.eval fs fuel ρ b | none
+    return .int (op.apply x y)
+  | .division op a b => do
     let .int x ← Expr.eval fs fuel ρ a | none
     let .int y ← Expr.eval fs fuel ρ b | none
     return .int (op.apply x y)
@@ -111,6 +122,7 @@ branch, with the bindings it has made. -/
 def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : Env) :
     Body → Option Outcome
   | .value e => do return .ret (← Expr.eval fs fuel ρ e)
+  | .throw e => do return .panic (← Expr.eval fs fuel ρ e)
   | .state _ => some (.normal ρ)
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .ite c whenTrue whenFalse => do
@@ -119,6 +131,7 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .letState names branch rest => do
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
+    | .panic x => some (.panic x)
     | .ret _ => none
   | .fold names element body (.list items _) rest _ => do
     let values ← Expr.evalList fs fuel ρ items
@@ -128,20 +141,23 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       (fun outer inner => bindState names inner outer) ρ values
     match result with
     | .normal inner => Body.exec fs fuel inner rest
-    | .ret value => some (.ret value)
+    | .ret (.ok value) => some (.ret value)
+    | .ret (.error value) => some (.panic value)
     | _ => none
   | _ => none
 termination_by b => (fuel, sizeOf b, 0)
 
 end
 
-/-- Call the function `key` of the output with `args`. -/
+/-- Call the function `key` of the output with `args`: `.ok` of the value it
+returns, or `.error` of the message it throws. -/
 def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : List Val)
-    (fuel : Nat := 64) : Option Val := do
+    (fuel : Nat := 64) : Option (Except Val Val) := do
   let (params, body) ← fs.lookup key
   if params.length != args.length then none
   match ← Body.exec fs fuel (params.zip args).reverse body with
-  | .ret v => some v
+  | .ret v => some (.ok v)
+  | .panic x => some (.error x)
   | .normal _ => none
 
 end tolean.Go.IR
