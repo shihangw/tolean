@@ -108,6 +108,10 @@ structure TState where
   /-- The interface methods the translated code calls. -/
   methods : List (String × String) := []
   inEffectful : Bool := false
+  /-- The functions whose output returns an `Except`, because they can panic:
+  those that the proved path writes so, and those here that call one. -/
+  panicking : List String := []
+  inPanicking : Bool := false
   /-- The state type parameter of effectful functions: `State`, or a fresh
   name when the package uses `State`. -/
   stateVar : String := "State"
@@ -118,6 +122,16 @@ abbrev TM := StateT TState (Except String)
 def fail {A : Type} (span : Span) (message : String) : TM A := do
   let s ← get
   throw s!"{s.file}:{span.start.line}:{span.start.col}: {message}"
+
+/-- The monad of the function being written: `StateM` for effects, and
+`Except String` over it when the function can panic. -/
+def monadText : TM String := do
+  let st ← get
+  return match st.inEffectful, st.inPanicking with
+    | true, true => s!"ExceptT String (StateM {st.stateVar})"
+    | true, false => s!"StateM {st.stateVar}"
+    | false, true => "Except String"
+    | false, false => "Id"
 
 /-! ## Names -/
 
@@ -489,6 +503,12 @@ partial def transExpr (e : Expr) : TM (String × Ty) := do
     | "-" => return (s!"(Go.wrap64 (-{x}))", t)
     | _ => fail s s!"the operator '{op}' is not supported"
   | .binary s op lhs rhs =>
+    -- `←` would run a call in the right operand of `&&` or `||` before the
+    -- left one, even when Go skips it.
+    if op == "&&" || op == "||" then
+      let panicking := (← get).panicking
+      if (exprIdents rhs).any panicking.contains then
+        fail s s!"the right operand of {op} may not call a function that can panic"
     let (a, ta) ← transExpr lhs
     let (b, tb) ← transExpr rhs
     if op == "&&" || op == "||" then return (s!"({a} {op} {b})", .bool)
@@ -574,6 +594,10 @@ partial def transPureCall (s : Span) (callee : Expr) (args : List Expr) : TM (St
     | some f =>
       let argStrs ← transArgs f args
       let results ← f.results.mapM resolveType
+      -- A function that can panic returns an `Except`: `←` binds its value,
+      -- and its panic ends the caller.
+      if (← get).panicking.contains name then
+        return (s!"(← {leanName name}{argStrs})", resultTy results)
       return (s!"({leanName name}{argStrs})", resultTy results)
     | none => fail s s!"unknown function '{name}'"
   | .selector _ obj method =>
@@ -584,6 +608,8 @@ partial def transPureCall (s : Span) (callee : Expr) (args : List Expr) : TM (St
       | some f =>
         let argStrs ← transArgs f args
         let results ← f.results.mapM resolveType
+        if (← get).panicking.contains f.name then
+          return (s!"(← {x}.{leanName method}{argStrs})", resultTy results)
         return (s!"({x}.{leanName method}{argStrs})", resultTy results)
       | none => fail s s!"unknown method '{method}'"
     | _ => fail s "this call is not supported"
@@ -943,7 +969,7 @@ partial def transRange (mode : Mode) (depth : Nat) (s : Span) (op : Option Strin
     seen := l.go :: seen
     if assigned.contains l.go then written := written.push l
     else if mentioned.contains l.go then fixed := fixed.push l
-  let monad := if st.inEffectful then s!"StateM {st.stateVar}" else "Id"
+  let monad ← monadText
   let writtenTy ← if written.size == 1 then leanType written[0]!.ty
     else leanType (.tuple (written.toList.map (·.ty)))
   let resTy ← leanType (resultTy st.results)
@@ -1038,7 +1064,8 @@ def transFunc (f : FuncDef) : TM String := do
   let assigned := assignedNames f.body
   modify fun s => { s with file := f.file, scopes := [[]], used := [] }
   modify fun s => { s with fnName := leanName f.name, loopCount := 0 }
-  modify fun s => { s with inEffectful := isEff, mutNames := assigned }
+  let isPanic := (← get).panicking.contains f.name
+  modify fun s => { s with inEffectful := isEff, inPanicking := isPanic, mutNames := assigned }
   let results ← f.results.mapM resolveType
   modify fun s => { s with results }
   let mut params := #[]
@@ -1054,7 +1081,8 @@ def transFunc (f : FuncDef) : TM String := do
     params := params.push s!"({l.lean} : {← leanType t})"
   let resTy ← leanType (resultTy results)
   let stateVar := (← get).stateVar
-  let monad := if isEff then s!"StateM {stateVar} {resTy}" else resTy
+  let m ← monadText
+  let monad := if isEff || isPanic then s!"{m} {resTy}" else resTy
   let sigma := if isEff then s!"\{{stateVar} : Type} " else ""
   let body := match f.body with
     | .block _ ss => ss
@@ -1065,7 +1093,7 @@ def transFunc (f : FuncDef) : TM String := do
       some (indent 1 s!"let mut {l.lean} := {l.lean}")
     else none
   let lines ← transStmts .top 1 body
-  let open_ := if isEff then "do" else "Id.run do"
+  let open_ := if isEff || isPanic then "do" else "Id.run do"
   let name := match f.recv with
     | some (_, t) => s!"{leanName t}.{leanName (f.name.drop (t.length + 1)).toString}"
     | none => leanName f.name
@@ -1129,12 +1157,18 @@ def translatePkg (pkg : Pkg) (cfg : Config) (ns : String) (sources : List String
   -- translates them in the order of `funcOrder`, so that each comes after the
   -- functions it calls.
   let pure := Pure.translateFuncs decls (funcOrder.filter (!effectful.contains ·))
-  -- A function that can panic returns an `Except`, which only the proved
-  -- path knows how to call, and it does not call it yet either.
-  for f in funcs do
-    if !(pure.any (·.2.name == f.name)) then
-      if let some g := f.idents.find? fun n => pure.any fun r => r.2.name == n && r.2.panics then
-        throw s!"'{f.name}' calls '{g}', which can panic, and a call of such a function is not supported yet"
+  -- A function that can panic returns an `Except`. Those that the proved
+  -- path writes so, then each function here that calls one, until none is
+  -- added.
+  let mut panicking := pure.filter (·.2.panics) |>.map (·.2.name)
+  let mut grown := true
+  while grown do
+    grown := false
+    for f in funcs do
+      if !panicking.contains f.name && !(pure.any (·.2.name == f.name)) &&
+          f.idents.any (fun n => panicking.any fun g => g == n || g.endsWith ("." ++ n)) then
+        panicking := panicking ++ [f.name]
+        grown := true
   let names : tolean.IR.Names := { clashes := (Eval.program decls).names }
   let run : TM String := do
     -- Functions first, so the interface methods they call are known.
@@ -1157,7 +1191,7 @@ def translatePkg (pkg : Pkg) (cfg : Config) (ns : String) (sources : List String
     return header ++ "\n\n".intercalate (typeTexts.toList ++ valueTexts.toList ++ funcTexts.toList) ++
       s!"\n\nend {ns}\n"
   let stateVar := ("State" :: (List.range 1000).map (s!"State{· + 1}")).find? (!idents.contains ·)
-  match run.run { pkg, cfg, effectful, stateVar := stateVar.getD "State" } with
+  match run.run { pkg, cfg, effectful, panicking, stateVar := stateVar.getD "State" } with
   | .ok (text, _) => return text
   | .error e => throw e
 

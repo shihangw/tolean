@@ -1,0 +1,36 @@
+{"tolean": "0.3.1",
+ "sources":
+ [{"sha256": "a8ae798956dc7cf5023b113c163d9ecb2923b4007dd87857ce59e84149bec2f8",
+   "path": "corpus/translate/panics/panics.go"}],
+ "output":
+ {"sha256": "16b192bb4ff3289bfb5ac0535e6303388c89aa48aaf4b259418f79d280dd7498",
+  "path": "corpus/translate/panics/Panics.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Panics",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}
