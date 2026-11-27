@@ -5,10 +5,10 @@ The Go extension of the Tolean IR: the operations that the Go translator adds
 to the shared IR in `tolean/IR.lean`.
 
 Go adds no types, because its `int`, `int64`, `bool` and `string` are the
-shared `Int`, `Bool` and `String`. It adds three operations: `Go.wrap64`,
+shared `Int`, `Bool` and `String`. It adds four operations: `Go.wrap64`,
 which wraps an integer into the 64-bit range as Go's arithmetic does, `++` on
-strings, which is Go's `+` on strings, and `pure`, which returns a value from
-a function that can panic. Such a function returns `Except String T`, and a
+strings, which is Go's `+` on strings, `pure`, which returns a value from
+a function that can panic, and the tuple of a call's arguments. Such a function returns `Except String T`, and a
 panic is `throw` of its message.
 
 `IR/Eval.lean` gives the IR a meaning, so that a theorem can state what the
@@ -29,6 +29,9 @@ inductive ExprExt where
   | append
   /-- `(pure a)`: the value `a` as the result of a function that can panic. -/
   | pure
+  /-- `(a, b, …)`: the arguments of a call, evaluated for a test of their
+  divisors without the call itself. The output binds it to `_`. -/
+  | args
 deriving BEq, Repr, Inhabited, DecidableEq
 
 abbrev Ty := tolean.IR.Ty TyExt
@@ -66,6 +69,8 @@ def ExprExt.print (names : tolean.IR.Names) (op : ExprExt) (args : List String) 
   | .wrap64, [a] => s!"({tolean.IR.wrapped (leanName names "Go.wrap64") a})"
   | .append, [a, b] => s!"({a} ++ {b})"
   | .pure, [a] => s!"({tolean.IR.wrapped (leanName names "pure") a})"
+  | .args, [a] => a
+  | .args, args@(_ :: _) => "(" ++ ", ".intercalate args ++ ")"
   | _, _ => ""
 
 instance : tolean.IR.PrintOp ExprExt := ⟨ExprExt.print⟩
