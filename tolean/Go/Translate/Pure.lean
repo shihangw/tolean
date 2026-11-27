@@ -469,6 +469,27 @@ locals that a branch changes. A function that can panic (`monadic`) returns
 inductive Tail where
   | ret (result : Ty) (monadic : Bool)
   | state (names : List String)
+  /-- The body of a loop that `break` or `continue` can end, with the locals
+  that it changes. Its end and `continue` give `ForInStep.yield`, and `break`
+  gives `ForInStep.done`. When `canEnd` is false, the statements must not run
+  to their end, because they stand in a branch that skips the code after it. -/
+  | loop (names : List String) (canEnd : Bool)
+  /-- The clauses of a switch that `break` can end, with the locals that the
+  switch changes. Its end and `break` give them. `canEnd` is as for `loop`. -/
+  | switch (names : List String) (canEnd : Bool)
+
+/-- A `return`, `break` or `continue` can end the statements: the code after
+a branch that does joins the other branch. -/
+def Tail.jumps : Tail → Bool
+  | .state _ => false
+  | _ => true
+
+/-- The tail of a branch that skips the code after it: the branch must not
+run to its end. -/
+def Tail.close : Tail → Tail
+  | .loop names _ => .loop names false
+  | .switch names _ => .switch names false
+  | t => t
 
 def blockStatements : Stmt → List Stmt
   | .block _ ss => ss
@@ -508,27 +529,56 @@ end
 
 mutual
 
-/-- The statement holds a `return`. -/
-def hasReturn : Stmt → Bool
-  | .ret .. => true
-  | .block _ ss => anyReturn ss
-  | .ifStmt _ _ _ t e => hasReturn t || optionReturn e
-  | .switchStmt _ _ _ _ cs => clausesReturn cs
+/-- The statement can end the statements around it early: it holds a
+`return` or a `continue`, or a `break` when `brk`. A `break` in a nested
+switch ends that switch, so it does not count there. -/
+def exits (brk : Bool) : Stmt → Bool
+  | .ret .. | .cont _ => true
+  | .brk _ => brk
+  | .block _ ss => exitsList brk ss
+  | .ifStmt _ _ _ t e => exits brk t || exitsOption brk e
+  | .switchStmt _ _ _ _ cs => exitsClauses cs
   | _ => false
 
-def anyReturn : List Stmt → Bool
+def exitsList (brk : Bool) : List Stmt → Bool
   | [] => false
-  | s :: ss => hasReturn s || anyReturn ss
+  | s :: ss => exits brk s || exitsList brk ss
 
-def optionReturn : Option Stmt → Bool
+def exitsOption (brk : Bool) : Option Stmt → Bool
   | none => false
-  | some s => hasReturn s
+  | some s => exits brk s
 
-def clausesReturn : List CaseClause → Bool
+def exitsClauses : List CaseClause → Bool
   | [] => false
-  | .mk _ _ body :: cs => anyReturn body || clausesReturn cs
+  | .mk _ _ body :: cs => exitsList false body || exitsClauses cs
 
 end
+
+mutual
+
+/-- The statement holds a `break` that ends a loop or a switch around it,
+outside any switch or loop of its own. -/
+def breaks : Stmt → Bool
+  | .brk _ => true
+  | .block _ ss => breaksList ss
+  | .ifStmt _ init _ t e => breaksOption init || breaks t || breaksOption e
+  | .switchStmt _ init _ _ _ => breaksOption init
+  | _ => false
+
+def breaksList : List Stmt → Bool
+  | [] => false
+  | s :: ss => breaks s || breaksList ss
+
+def breaksOption : Option Stmt → Bool
+  | none => false
+  | some s => breaks s
+
+end
+
+/-- Some clause of a switch holds a `break` that ends the switch. -/
+def clausesBreak : List CaseClause → Bool
+  | [] => false
+  | .mk _ _ body :: cs => breaksList body || clausesBreak cs
 
 /-! ### Switch statements
 
@@ -591,6 +641,10 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
     match tail with
     | .ret .. => throw "the function can end without a return"
     | .state names => pure (.state names)
+    | .loop names true => pure (.yield names false)
+    | .switch names true => pure (.state names)
+    | .loop _ false | .switch _ false =>
+      throw "a branch that skips the code after its if must end with break, continue or return"
   | fuel + 1, st :: rest =>
     match bindCall? ctx env st with
     | some (form, sp, f, args, sig) => do
@@ -667,7 +721,9 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
     | .ifStmt sp (some s) c t els =>
       translateStmts ctx env tail fuel (.block sp [s, .ifStmt sp none c t els] :: rest)
     -- A switch is a chain of `if` statements, inside a block after its init
-    -- statement.
+    -- statement. When a clause breaks, the chain is a branch whose end and
+    -- `break` give the locals that the switch changes, and the code after
+    -- the switch follows it.
     | .switchStmt sp init tag bsp clauses => do
       if tag.isSome && !hasCase clauses then
         reject sp "a switch with an expression needs a case"
@@ -675,15 +731,39 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
       let st' := match init with
         | none => chain
         | some s => .block bsp [s, chain]
-      translateStmts ctx env tail fuel (st' :: rest)
+      if clausesBreak clauses then
+        match init with
+        | some s =>
+          translateStmts ctx env tail fuel
+            (.block bsp [s, .switchStmt sp none tag bsp clauses] :: rest)
+        | none =>
+          let names := changedNames [chain] env
+          if names.isEmpty then reject sp "a switch that breaks must change a local"
+          let inner ← translateStmts ctx env (.switch names true) fuel [chain]
+          return .letState names inner (← translateStmts ctx env tail fuel rest)
+      else
+        translateStmts ctx env tail fuel (st' :: rest)
+    -- `break` ends the innermost loop or switch, and `continue` the run of
+    -- the innermost loop's body.
+    | .brk sp => do
+      unless rest.isEmpty do reject sp "the code after break is unreachable"
+      match tail with
+      | .loop names _ => pure (.done names false)
+      | .switch names _ => pure (.state names)
+      | _ => reject sp "break must be in a for loop or a switch"
+    | .cont sp => do
+      unless rest.isEmpty do reject sp "the code after continue is unreachable"
+      match tail with
+      | .loop names _ => pure (.yield names false)
+      | _ => reject sp "continue must be in a for loop, outside a switch that breaks"
     -- A block: what it declares goes out of scope at its end. When it
     -- returns, it must end the function. Otherwise it gives the locals that it
     -- changes, as a branch does.
     | .block sp body => do
-      if anyReturn body then
-        let .ret .. := tail | reject sp "only a branch that always returns may return"
+      if exitsList true body then
+        unless tail.jumps do reject sp "only a branch that always returns may return"
         unless rest.isEmpty do
-          reject sp "a block, or an if or switch with an init statement, that returns must end the function"
+          reject sp "a block, or an if or switch with an init statement, that returns, breaks or continues must end its statements"
         translateStmts ctx env tail fuel body
       else
         let names := changedNames body env
@@ -704,11 +784,11 @@ def translateIf (ctx : Ctx) (env : Env) (tail : Tail) : Nat → Span → Expr �
     unless ct = .bool do reject sp "a condition must be a boolean"
     let thenSS := blockStatements t
     let elseSS := elseStatements els
-    if anyReturn (thenSS ++ elseSS) then
-      let .ret .. := tail | reject sp "only a branch that always returns may return"
+    if exitsList true (thenSS ++ elseSS) then
+      unless tail.jumps do reject sp "only a branch that always returns may return"
       if els.isSome && !rest.isEmpty then
-        reject sp "when a branch returns and the if has an else, nothing may follow the if"
-      let whenTrue ← translateStmts ctx env tail fuel thenSS
+        reject sp "when a branch returns, breaks or continues and the if has an else, nothing may follow the if"
+      let whenTrue ← translateStmts ctx env (if rest.isEmpty then tail else tail.close) fuel thenSS
       let whenFalse ← translateStmts ctx env tail fuel (elseSS ++ rest)
       return guarded cond (.ite cond whenTrue whenFalse)
     else
@@ -733,10 +813,14 @@ def translateTop (ctx : Ctx) (env : Env) (result : Ty) (monadic : Bool) : List S
       reject sp "the counted body must not change its counter or contain another loop"
     let inner ← declare env sp index .int
     let changed := (env.filter fun l => (changesList ss).contains l.name)
-    let body ← translateStmts ctx inner (.state (changed.map (·.name))) stmtFuel ss
+    -- A body that breaks or continues runs with `forIn`, and each run gives
+    -- a `ForInStep`.
+    let jumps := exitsList true ss
+    let tail := if jumps then .loop (changed.map (·.name)) true else .state (changed.map (·.name))
+    let body ← translateStmts ctx inner tail stmtFuel ss
     let next ← translateStmts ctx env (.ret result monadic) stmtFuel rest
     return tolean.Core.Loop.lowerLoop sp (changed.map fun l => (l.name, l.type.lean))
-      index .int body (.list (items.map valueCode) .int) next false none
+      index .int body (.list (items.map valueCode) .int) next jumps none
   | ss => translateStmts ctx env (.ret result monadic) stmtFuel ss
 
 /-- The parameters and their types. A parameter without a name, as in

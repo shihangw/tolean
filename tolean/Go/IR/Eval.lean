@@ -69,6 +69,8 @@ def loopOutcome : Outcome → tolean.Core.Loop.Outcome Env (Except Val Val)
   | .normal env => .normal env
   | .ret value => .ret (.ok value)
   | .panic value => .ret (.error value)
+  | .brk env => .brk env
+  | .cont env => .cont env
 
 mutual
 
@@ -137,6 +139,10 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
   | .value e => do return .ret (← Expr.eval fs fuel ρ e)
   | .throw e => do return .panic (← Expr.eval fs fuel ρ e)
   | .state _ => some (.normal ρ)
+  -- `ForInStep.yield` ends one run of a loop body, and the loop goes on.
+  -- `ForInStep.done` is a `break`, which ends the loop.
+  | .yield _ false => some (.normal ρ)
+  | .done _ false => some (.brk ρ)
   | .let name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .ite c whenTrue whenFalse => do
     let .bool t ← Expr.eval fs fuel ρ c | none
@@ -145,7 +151,7 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     match ← Body.exec fs fuel ρ branch with
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
     | .panic x => some (.panic x)
-    | .ret _ => none
+    | _ => none
   -- `f a b >>= fun x => rest`: the call's panic is the body's panic, and its
   -- value is bound to `x` otherwise.
   | .bind name ref args rest => do
@@ -158,7 +164,7 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
       match ← Body.exec fs fuel (params.zip vs).reverse body with
       | .ret v => Body.exec fs (fuel + 1) ((name, v) :: ρ) rest
       | .panic x => some (.panic x)
-      | .normal _ => none
+      | _ => none
   | .fold names element body (.list items _) rest _ => do
     let values ← Expr.evalList fs fuel ρ items
     let result ← tolean.Core.Loop.runFold
@@ -184,6 +190,6 @@ def runIn (fs : List (DeclRef × List String × Body)) (key : DeclRef) (args : L
   match ← Body.exec fs fuel (params.zip args).reverse body with
   | .ret v => some (.ok v)
   | .panic x => some (.error x)
-  | .normal _ => none
+  | _ => none
 
 end tolean.Go.IR

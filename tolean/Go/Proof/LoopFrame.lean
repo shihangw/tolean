@@ -6,31 +6,36 @@ namespace tolean.Go.Proof.LoopFrame
 open tolean.Go.Syntax tolean.Go.Pure tolean.Core.Loop
 
 /-- The source keeps new locals before an updated outer frame. The target may
-shadow old bindings, but agrees on the inner store's current lookups. Fresh
-locals are not outer variables, so changedNames never copies them out. -/
+shadow old bindings, but agrees with the outer frame on the names in scope.
+Fresh locals are not outer variables, so changedNames never copies them out. -/
 def Inner (env : Pure.Env) (ss : List Stmt) (outerS _outerT innerS innerT : Eval.Env) : Prop :=
   ∃ fresh modified, innerS = fresh ++ modified ∧
-    Agree innerS innerT ∧ (∀ p ∈ fresh, env.has p.1 = false) ∧
+    AgreeOn env modified innerT ∧ (∀ p ∈ fresh, env.has p.1 = false) ∧
     Frame (changesList ss) modified outerS
 
 theorem bind_frame (env : Pure.Env) (ss : List Stmt) (s t : Eval.Env)
     (agree : Agree s t) (x : String) (v : Eval.Val) (fresh : env.has x = false) :
     Inner env ss s t ((x, v) :: s) ((x, v) :: t) := by
-  refine ⟨[(x, v)], s, rfl, agree_cons agree x v, ?_, Frame.refl _ _⟩
-  intro p hp
-  have : p = (x, v) := by simpa using hp
-  subst p
-  exact fresh
+  refine ⟨[(x, v)], s, rfl, fun n hn => ?_, ?_, Frame.refl _ _⟩
+  · have hnx : n ≠ x := fun h => by rw [h, fresh] at hn; exact Bool.noConfusion hn
+    rw [lookup_cons_ne _ _ hnx]
+    exact agree n
+  · intro p hp
+    have : p = (x, v) := by simpa using hp
+    subst p
+    exact fresh
 
+/-- The way the body of a loop ended, as the statements say: `yield` is their
+end or a `continue`, and `done` is a `break`. -/
 theorem body_frame (p : Eval.Program) (fs : Funcs) (fuel : Nat)
     (env : Pure.Env) (ss : List Stmt) (tail : Tail) (body : IR.Body)
     (sim : StmtSim p fs fuel env tail ss body)
-    (s t innerT : Eval.Env) (agree : Agree s t) (scope : Scoped env s)
-    (done : IR.Body.exec fs fuel t body = some (.normal innerT)) :
-    ∃ innerS, Eval.exec p fuel s ss = some (.normal innerS) ∧
+    (s t innerT : Eval.Env) (agree : Agree s t) (scope : Scoped env s) (b : Bool)
+    (done : IR.Body.exec fs fuel t body = some (irEnd b innerT)) :
+    ∃ k innerS, tail.Allows b k ∧ Eval.exec p fuel s ss = some (k.out innerS) ∧
       Inner env ss s t innerS innerT := by
-  obtain ⟨_, fresh, modified, hs, ha, hn, hf⟩ := (sim s t agree scope).2.1 innerT done
-  exact ⟨fresh ++ modified, hs, fresh, modified, rfl, ha, hn, hf⟩
+  obtain ⟨k, fresh, modified, hk, hs, ha, hn, hf⟩ := (sim s t agree scope).2.1 b innerT done
+  exact ⟨k, fresh ++ modified, hk, hs, fresh, modified, rfl, ha, hn, hf⟩
 
 /-- This uses the real translator's no-shadowing check and its statement proof.
 The premise is successful translation, not an assumed body simulation. -/
@@ -38,12 +43,12 @@ theorem accepted_body_frame (p : Eval.Program) (fs : Funcs) (fuel : Nat)
     (ctx : Ctx) (program : ctx.program = p) (calls : CallsAgree p fs fuel)
     (env : Pure.Env) (ss : List Stmt) (tail : Tail) (body : IR.Body) (budget : Nat)
     (translated : translateStmts ctx env tail budget ss = .ok body)
-    (s t innerT : Eval.Env) (agree : Agree s t) (scope : Scoped env s)
-    (done : IR.Body.exec fs fuel t body = some (.normal innerT)) :
-    ∃ innerS, Eval.exec p fuel s ss = some (.normal innerS) ∧
+    (s t innerT : Eval.Env) (agree : Agree s t) (scope : Scoped env s) (b : Bool)
+    (done : IR.Body.exec fs fuel t body = some (irEnd b innerT)) :
+    ∃ k innerS, tail.Allows b k ∧ Eval.exec p fuel s ss = some (k.out innerS) ∧
       Inner env ss s t innerS innerT :=
   body_frame p fs fuel env ss tail body (stmts_sound p fs fuel program calls translated)
-    s t innerT agree scope done
+    s t innerT agree scope b done
 
 theorem leave_frame (env : Pure.Env) (ss : List Stmt)
     (s t si ti out : Eval.Env) (agree : Agree s t) (scope : Scoped env s)
@@ -58,11 +63,7 @@ theorem leave_frame (env : Pure.Env) (ss : List Stmt)
     rw [bindState_lookup bound k]
     split
     · next hk =>
-      have hkenv := (mem_changedNames.mp hk).1
-      rw [← ha k, lookup_append_fresh modified (fun p hp heq => by
-        have h := hn p hp
-        rw [heq, hkenv] at h
-        exact Bool.noConfusion h)]
+      exact ha k (mem_changedNames.mp hk).1
     · next hk =>
       rw [← agree k]
       by_cases hkc : k ∈ changesList ss
@@ -105,10 +106,7 @@ theorem leave_related (env : Pure.Env) (ss : List Stmt)
     intro n hn
     have hen := (mem_changedNames.mp hn).1
     obtain ⟨fresh, modified, rfl, ha, hfresh, hframe⟩ := frame
-    rw [← ha n, lookup_append_fresh modified (fun p hp heq => by
-      have h := hfresh p hp
-      rw [heq, hen] at h
-      exact Bool.noConfusion h)]
+    rw [← ha n hen]
     exact (hframe.isSome n).trans ((scope n).trans hen)
   obtain ⟨out, hb⟩ := bindState_defined ti (changedNames ss env) t found
   obtain ⟨result, hs, ha, hscope⟩ := leave_frame env ss s t si ti out agree scope frame hb
@@ -121,19 +119,26 @@ theorem bound_body_frame (p : Eval.Program) (fs : Funcs) (fuel : Nat)
     (env : Pure.Env) (ss : List Stmt) (tail : Tail) (body : IR.Body)
     (index : String) (value : Eval.Val) (freshIndex : env.has index = false)
     (sim : StmtSim p fs fuel (env ++ [⟨index, .int⟩]) tail ss body)
-    (s t innerT : Eval.Env) (agree : Agree s t) (scope : Scoped env s)
-    (done : IR.Body.exec fs fuel ((index, value) :: t) body = some (.normal innerT)) :
-    ∃ innerS, Eval.exec p fuel ((index, value) :: s) ss = some (.normal innerS) ∧
+    (s t innerT : Eval.Env) (agree : Agree s t) (scope : Scoped env s) (b : Bool)
+    (done : IR.Body.exec fs fuel ((index, value) :: t) body = some (irEnd b innerT)) :
+    ∃ k innerS, tail.Allows b k ∧ Eval.exec p fuel ((index, value) :: s) ss = some (k.out innerS) ∧
       Inner env ss s t innerS innerT := by
-  obtain ⟨innerS, executed, fresh, modified, shape, agreement, freshNames, frame⟩ :=
+  obtain ⟨k, innerS, allows, executed, fresh, modified, shape, agreement, freshNames, frame⟩ :=
     body_frame p fs fuel _ ss tail body sim _ _ innerT
-      (agree_cons agree index value) (scoped_cons scope index .int value) done
+      (agree_cons agree index value) (scoped_cons scope index .int value) b done
   cases modified with
   | nil => simp [Frame] at frame
   | cons entry modified =>
     obtain ⟨entryName, _, frame⟩ := frame
-    refine ⟨innerS, executed, fresh ++ [entry], modified, ?_, agreement, ?_, frame⟩
+    refine ⟨k, innerS, allows, executed, fresh ++ [entry], modified, ?_, fun n hn => ?_, ?_, frame⟩
     · simpa [List.append_assoc] using shape
+    · have hni : n ≠ index := fun h => by rw [h, freshIndex] at hn; exact Bool.noConfusion hn
+      have := agreement n (by rw [has_append, hn]; rfl)
+      rw [← this]
+      obtain ⟨name, w⟩ := entry
+      simp only at entryName
+      subst entryName
+      exact (lookup_cons_ne _ _ hni).symm
     · intro q hq
       rcases List.mem_append.mp hq with hq | hq
       · have h := freshNames q hq
@@ -143,6 +148,74 @@ theorem bound_body_frame (p : Eval.Program) (fs : Funcs) (fuel : Nat)
         subst q
         simpa only [entryName] using freshIndex
 
+/-- The output has no `continue`: a loop's body that goes on gives
+`ForInStep.yield`, which is an end. -/
+theorem exec_ne_cont (fs : Funcs) : ∀ (fuel : Nat) (ρ : Eval.Env) (b : IR.Body) (e : Eval.Env),
+    IR.Body.exec fs fuel ρ b ≠ some (.cont e)
+  | fuel, ρ, .let name x rest, e, h => by
+    rw [IR.Body.exec.eq_def] at h
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨_, _, h⟩ := h
+    exact exec_ne_cont fs fuel _ rest e h
+  | fuel, ρ, .ite c t f, e, h => by
+    rw [IR.Body.exec.eq_def] at h
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨a, _, h⟩ := h
+    split at h
+    · split at h
+      · exact exec_ne_cont fs fuel _ t e h
+      · exact exec_ne_cont fs fuel _ f e h
+    · simp at h
+  | fuel, ρ, .letState names br rest, e, h => by
+    rw [IR.Body.exec.eq_def] at h
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨a, _, h⟩ := h
+    split at h
+    · simp only [Option.bind_eq_some_iff] at h
+      obtain ⟨_, _, h⟩ := h
+      exact exec_ne_cont fs fuel _ rest e h
+    · simp at h
+    · simp at h
+  | 0, ρ, .bind name ref args rest, e, h => by
+    rw [IR.Body.exec.eq_def] at h
+    simp [bind] at h
+  | fuel + 1, ρ, .bind name ref args rest, e, h => by
+    rw [IR.Body.exec.eq_def] at h
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨a, _, _, _, h⟩ := h
+    split at h
+    · simp at h
+    · simp only [pure, Option.bind_some, Option.bind_eq_some_iff] at h
+      obtain ⟨o, _, h⟩ := h
+      split at h
+      · exact exec_ne_cont fs (fuel + 1) _ rest e h
+      · simp at h
+      · simp at h
+  | fuel, ρ, .fold names el body items rest m, e, h => by
+    rw [IR.Body.exec.eq_def] at h
+    cases items
+    all_goals try (split at h <;> simp_all; done)
+    simp only [bind, Option.bind_eq_some_iff] at h
+    obtain ⟨_, _, o, _, h⟩ := h
+    split at h
+    · exact exec_ne_cont fs fuel _ rest e h
+    all_goals simp at h
+  | fuel, ρ, .handle .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .value .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all [bind, Option.bind_eq_some_iff]
+  | fuel, ρ, .state .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .yield .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .done .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .exit .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .letArray .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .matchNull .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .matchTag .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .letTuple .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .throw .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all [bind, Option.bind_eq_some_iff]
+  | fuel, ρ, .letBorrow .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .letCall .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+  | fuel, ρ, .letLifted .., e, h => by rw [IR.Body.exec.eq_def] at h; split at h <;> simp_all
+termination_by fuel _ b => (fuel, sizeOf b)
+
 /-- The shared loop theorem lifts Go's success-only statement simulation.
 Unlike exact simulation, this does not require failed target calls to fail in
 the source. -/
@@ -150,6 +223,8 @@ theorem loop_refines (p : Eval.Program) (fs : Funcs) (fuel : Nat)
     (env : Pure.Env) (ss : List Stmt) (tail : Tail) (body : IR.Body)
     (index : String) (freshIndex : env.has index = false)
     (sim : StmtSim p fs fuel (env ++ [⟨index, .int⟩]) tail ss body)
+    (loopTail : ∀ b k, tail.Allows b k →
+      (b = false ∧ (k = .next ∨ k = .cont)) ∨ (b = true ∧ k = .brk))
     (s t : Eval.Env) (agree : Agree s t) (scope : Scoped env s)
     (items : List Eval.Val) :
     ∀ {out}, runFold
@@ -197,10 +272,25 @@ theorem loop_refines (p : Eval.Program) (fs : Funcs) (fuel : Nat)
       | normal innerT =>
         simp only [ht, Option.map_some, IR.loopOutcome, Option.some.injEq] at executed
         subst out
-        obtain ⟨innerS, hs, frame⟩ :=
+        obtain ⟨k, innerS, allows, hs, frame⟩ :=
           bound_body_frame p fs fuel env ss tail body index value freshIndex sim
-            s t innerT h.1 h.2.1 ht
-        exact ⟨.normal innerS, by simp [hs, Eval.Outcome.toLoop], frame⟩
+            s t innerT h.1 h.2.1 false ht
+        rcases loopTail false k allows with ⟨-, rfl | rfl⟩ | ⟨h', -⟩
+        · exact ⟨.normal innerS, by simp [hs, Jump.out, Eval.Outcome.toLoop], frame⟩
+        · exact ⟨.cont innerS, by simp [hs, Jump.out, Eval.Outcome.toLoop], frame⟩
+        · cases h'
+      | brk innerT =>
+        simp only [ht, Option.map_some, IR.loopOutcome, Option.some.injEq] at executed
+        subst out
+        obtain ⟨k, innerS, allows, hs, frame⟩ :=
+          bound_body_frame p fs fuel env ss tail body index value freshIndex sim
+            s t innerT h.1 h.2.1 true ht
+        rcases loopTail true k allows with ⟨h', -⟩ | ⟨-, rfl⟩
+        · cases h'
+        · exact ⟨.brk innerS, by simp [hs, Jump.out, Eval.Outcome.toLoop], frame⟩
+      | cont innerT =>
+        simp only [ht, Option.map_some, IR.loopOutcome, Option.some.injEq] at executed
+        exact absurd ht (exec_ne_cont fs fuel _ body innerT)
   · exact ⟨agree, scope, Frame.refl _ _⟩
 
 end tolean.Go.Proof.LoopFrame
@@ -241,9 +331,9 @@ theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
           (tolean.Core.Loop.lowerLoop sp
             ((env.filter fun l => (changesList loopSS).contains l.name).map
               fun l => (l.name, l.type.lean))
-            index .int loopBody (.list (items.map valueCode) .int) next false none) = some out →
+            index .int loopBody (.list (items.map valueCode) .int) next (exitsList true loopSS) none) = some out →
           (Eval.exec p fuel s (.forStmt sp init cond post (.block bsp loopSS) :: rest) = some out ∧
-            ∀ ρ, out ≠ .normal ρ) ∨
+            ∀ b ρ, out ≠ irEnd b ρ) ∨
           ∃ source target, Eval.execStmt p fuel s
               (.forStmt sp init cond post (.block bsp loopSS)) = some (.normal source) ∧
             Agree source target ∧ Scoped env source ∧
@@ -269,6 +359,8 @@ theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
         | some targetOut =>
           obtain ⟨sourceOut, sourceRun, related⟩ :=
             LoopFrame.loop_refines p fs fuel env loopSS _ loopBody index freshIndex simBody
+              (fun b k hk => by
+                split at hk <;> cases b <;> simp_all [Tail.Allows])
               s t agree scope items targetRun
           have sourceStmt : Eval.execStmt p fuel s
               (.forStmt sp init cond post (.block bsp loopSS)) =
@@ -295,22 +387,22 @@ theorem top_sound (p : Eval.Program) (fs : Funcs) (fuel : Nat)
             | ok v =>
               simp [targetRun, bind, Option.bind] at executed
               subst out
-              exact ⟨exec_cons_ret p fuel sourceStmt, fun _ h => by cases h⟩
+              exact ⟨exec_cons_ret p fuel sourceStmt, fun b _ h => by cases b <;> cases h⟩
             | error x =>
               simp [targetRun, bind, Option.bind] at executed
               subst out
-              exact ⟨exec_cons_panic p fuel sourceStmt, fun _ h => by cases h⟩
+              exact ⟨exec_cons_panic p fuel sourceStmt, fun b _ h => by cases b <;> cases h⟩
           · simp [targetRun] at executed
           · simp [targetRun] at executed
-      refine ⟨fun value executed => ?_, fun target executed => ?_, fun x executed => ?_⟩
+      refine ⟨fun value executed => ?_, fun b target executed => ?_, fun x executed => ?_⟩
       · rcases key _ executed with done | ⟨source, target, step, ha, hs, next⟩
         · exact done.1
         · rw [exec_cons_normal p fuel step]
           exact (simRest source target ha hs).1 value next
       · rcases key _ executed with done | ⟨source, inner, step, ha, hs, next⟩
-        · exact absurd rfl (done.2 target)
-        · have impossible := ((simRest source inner ha hs).2.1 target next).1
-          simp [Tail.isRet] at impossible
+        · exact absurd rfl (done.2 b target)
+        · obtain ⟨_, _, _, impossible, -⟩ := (simRest source inner ha hs).2.1 b target next
+          cases b <;> simp [Tail.Allows] at impossible
       · rcases key _ executed with done | ⟨source, target, step, ha, hs, next⟩
         · exact done.1
         · rw [exec_cons_normal p fuel step]

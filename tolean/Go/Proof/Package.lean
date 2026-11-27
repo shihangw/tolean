@@ -230,6 +230,8 @@ theorem callO_some {fs : Funcs} {fuel : Nat} {ref : DeclRef} {vs : List Val} {v 
         cases o with
         | normal _ => simp [hl, hlen, hex] at h
         | panic _ => simp [hl, hlen, hex] at h
+        | brk _ => simp [hl, hlen, hex] at h
+        | cont _ => simp [hl, hlen, hex] at h
         | ret w => simp [hl, hlen, hex] at h; rw [h]
     · simp [hl, hlen] at h
 
@@ -271,6 +273,10 @@ theorem body_agree (fuel : Nat)
   | ret v => rw [hb.1 v hex]; rfl
   | panic x => rw [hb.2.2 x hex]; rfl
   | normal ρ => exact absurd rfl (hno ρ)
+  | brk ρ =>
+    obtain ⟨_, _, _, impossible, -⟩ := hb.2.1 true ρ hex
+    simp [Tail.Allows] at impossible
+  | cont ρ => exact absurd hex (LoopFrame.exec_ne_cont _ fuel _ b ρ)
 
 /-- Every call of the output agrees with the interpreter, by induction on the
 fuel: a call at `fuel + 1` runs a body whose calls have `fuel`. -/
@@ -291,6 +297,8 @@ theorem calls_agree : ∀ fuel, CallsAgree (Eval.program decls)
         | some o =>
           cases o with
           | normal _ => simp [hl, hlen, hex] at h
+          | brk _ => simp [hl, hlen, hex] at h
+          | cont _ => simp [hl, hlen, hex] at h
           | ret v =>
             simp [hl, hlen, hex] at h
             subst h
@@ -322,6 +330,8 @@ theorem translate_sound (name : String) (args : List Val) (fuel : Nat) (r : Exce
       | some o =>
         cases o with
         | normal _ => simp [hl, hlen, hex] at hv
+        | brk _ => simp [hl, hlen, hex] at hv
+        | cont _ => simp [hl, hlen, hex] at hv
         | ret v =>
           simp [hl, hlen, hex] at hv
           subst hv

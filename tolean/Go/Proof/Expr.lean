@@ -108,7 +108,7 @@ def callR (fs : Funcs) (fuel : Nat) (ref : DeclRef) (vs : List Val) : Option (Ex
     match ← IR.Body.exec fs fuel (params.zip vs).reverse body with
     | .ret v => some (.ok v)
     | .panic x => some (.error x)
-    | .normal _ => none
+    | _ => none
 
 /-- Each call of the output that returns a value or panics is a call that
 returns the same value or panics the same way in the interpreter. -/
