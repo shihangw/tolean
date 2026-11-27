@@ -81,7 +81,6 @@ Node-backed interpreter test cover that case. Optional calls remain refused.
 | A default parameter value | `Option` with a default at the call | A default that reads another parameter |
 | `while` and `do … while`, with a `@decreases` tag that names a measure | A recursive function with `termination_by`, as for recursion below | A loop without such a measure |
 | A rest parameter `...xs: T[]`, and a spread argument `f(...xs)` | A `List T` argument | A spread argument to a function whose parameters are not a rest parameter |
-| A class with `readonly` fields and methods that do not change `this` | A structure and one function per method | Methods that change `this`, inheritance other than from `Error`, getters, setters and `static` state |
 
 ### Generics
 
@@ -317,13 +316,6 @@ leaves a gap.
 14. **P1.** Local functions: general final return expressions in functions
     that change captured variables, implicit transitive captures, longer
     sibling call chains, and value-returning callers with only indirect state changes.
-15. **P1.** Certificates for counted `for` loops: each counted loop adds a
-    hypothesis that `countUp?` on its bound gives a value. Print the bound
-    over the parameters, and refuse bounds that read anything but parameters.
-    See the [counted-loop open question](#open-questions).
-16. **P1.** Certificates for generic functions and interfaces: take a
-    `Codec N T` for each type parameter and write codec constructors for
-    generic interfaces. See the [generic certificate open question](#open-questions).
 17. **P2.** `try` and `catch`: accept `try { … } catch (e) { … }` where the
     catch tests `e` with `instanceof` or ignores it. Keep `finally`, rethrowing
     a changed value and throwing anything but an error refused. See the
@@ -352,27 +344,9 @@ leaves a gap.
     obligations. Other element types, captures of generic types and
     `@decreases` obligations remain refused. See the
     [decision](../decisions/2026-11-17-project-proof-obligations.md).
-19. **Done for the `const` gap.** The translator and interpreter share one
-    predicate that checks assignments to each `for (const … of …)` binding.
-    The check covers simple names and array patterns, and the interpreter
-    gives no value when a body assigns a binding. The syntax scan also refuses
-    writes inside nested functions and to shadowed names, because it does not
-    track binding identity. Modeling that identity would change the interpreter
-    environment relation and its statement proofs. See the
-    [decision record](../decisions/2026-11-24-for-of-const-bindings.md).
-20. **Done for local guards.** Compose guarded string-keyed Record lookup
-    certificates through callbacks and loops. The per-element callback and
-    loop-step proofs derive ownership from a guard in their own body, without
-    an external success premise. Required certificates cover a guarded map
-    and sum loop, plus an undefined-test callback and sum loop over optional
-    number values. Unguarded reads remain refused. Guards across
-    bindings, outer guards and reduce callbacks remain outside this analysis.
-    The
-    [decision record](../decisions/2026-11-16-string-record-keys.md) and its
-    positive and negative corpus cases record this boundary.
 
-Steps 2 and 4 cover most of the code in the survey. Step 8 matters most for
-proofs, because a fold over events keeps much of its state in maps.
+Step 8 matters most for proofs, because a fold over events keeps much of its
+state in maps.
 
 ## Refactors from review
 
@@ -451,10 +425,10 @@ that the earlier pull request already contains it.
 An open question ends with a recommendation until a step decides it. A
 decision record then states the choice and any limits that remain.
 
-- How should a certificate cover a generic function or interface? Before step
-  16, the certifier had no encoder for a type parameter, so a file with either
-  got no certificate. The claim could take an encoder for each type parameter
-  as an argument, since the code never looks inside such a value.
+- How should a certificate cover a generic function or interface? Before the
+  generic codecs, the certifier had no encoder for a type parameter, so a file
+  with either got no certificate. The claim could take an encoder for each
+  type parameter as an argument, since the code never looks inside such a value.
 
   Decision: require a `Codec N T` for each type parameter. A codec proves that
   its decoder reverses its encoder, and that the encoder never gives `null`
@@ -586,8 +560,9 @@ decision record then states the choice and any limits that remain.
   a rethrow of a changed value, and a `throw` of anything but an error. The
   locals that the `try` body assigns become its result tuple, as a loop
   body's do and a local function's do
-  ([decision](../decisions/2026-11-12-local-functions.md)), so the
-  threading that these use is already in place.
+  ([decision](../decisions/2026-11-12-local-functions.md)), but this threading
+  covers normal completion only. Thrown completions need to carry the
+  environment first.
 
 - The map-borrow question is settled by the
   [decision to pass changed maps back](../decisions/2026-11-14-map-borrows.md).
@@ -601,14 +576,18 @@ decision record then states the choice and any limits that remain.
   project supplies a proof that it is consistent?
 
   Decision: yes, with a fixed axiom policy and statements from Tolean.
-  The [first slice](../decisions/2026-11-17-project-proof-obligations.md)
-  checks named project proofs but does not yet generate these statements.
+  Tolean now generates these statements for `bigint` comparators that do not
+  capture generic types. Other element types remain refused. The
+  [project proof checks](../decisions/2026-11-17-project-proof-obligations.md)
+  require the exact theorem type.
   Tolean states the obligation, `Consistent cmp`, as a theorem in the output.
   Its tactic proves the two known shapes. When the tactic fails, the project
   may supply the proof in a file beside the output, which the manifest
   records and the build checks for `sorry` and for axioms. The same
-  mechanism serves a `@decreases` measure, the counted-loop bound above, and
-  keys that must not be `NaN`. The statement always comes from Tolean and the
+  mechanism could later cover a `@decreases` measure and keys that must not
+  be `NaN`. Support for other comparator element types and captures of generic
+  types also remains open. Counted-loop bounds already become certificate
+  hypotheses, as described above. The statement always comes from Tolean and the
   project supplies only the proof, so a wrong proof fails the build and a
   wrong statement cannot get in. The obligation may restrict itself to the
   inputs, because a comparator on `number` keys is consistent only without
