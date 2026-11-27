@@ -1080,4 +1080,30 @@ export class Gen {
       return (m.get(0n) ?? 0n) + (m.get(1n) ?? 0n) + (m.get(2n) ?? 0n) + (m.get(3n) ?? 0n);
     }\n`;
   }
+
+  /** A borrowing function that changes two maps, called directly or through
+   * a forwarding function that passes the maps in the other order. */
+  twoMapBorrowProgram(forward = false): string {
+    const updates: Array<string> = [];
+    // Each map parameter must change, so the first two updates take one each.
+    for (let i = 0; i < 2 + Math.floor(this.next() * 8); i++) {
+      const map = i === 0 ? 'a' : i === 1 ? 'b' : this.chance(0.5) ? 'a' : 'b';
+      const key = `${Math.floor(this.next() * 4)}n`;
+      updates.push(this.chance(0.7) ? `${map}.set(${key}, x);` : `${map}.delete(${key});`);
+    }
+    const sum = (m: string): string => [0, 1, 2, 3].map(k => `(${m}.get(${k}n) ?? 0n)`).join(' + ');
+    return `function change(a: Map<bigint, bigint>, b: Map<bigint, bigint>, x: bigint): void {
+      ${updates.join('\n')}
+    }
+    ${forward ? `function forward(p: Map<bigint, bigint>, x: bigint, q: Map<bigint, bigint>): void {
+      change(q, p, x);
+      p.set(3n, 1n);
+    }` : ''}
+    export function f(x: bigint): bigint {
+      const a = new Map<bigint, bigint>([[0n, 7n], [2n, 9n]]);
+      const b = new Map<bigint, bigint>([[1n, 5n]]);
+      ${forward ? 'forward(a, x, b)' : 'change(a, b, x)'};
+      return ${sum('a')} + 10n * (${sum('b')});
+    }\n`;
+  }
 }

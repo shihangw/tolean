@@ -76,7 +76,50 @@ private def rem := "func F(a int, b int) int { return a % b }"
 #guard refused "func F(a int, b int) bool { return b != 0 && a / b > 1 }"
 #guard refused "func F(a int, b int) bool { return b == 0 || a % b > 1 }"
 #guard refused "func F(a string, b string) string { return a / b }"
--- A call of a function that can panic is not supported yet.
-#guard refused "func G(a int) int { return 1 / a }\nfunc F(a int, b int) int { return G(a) }"
+
+/-! ### Calls of a function that can panic
+
+The caller binds the call with `>>=`, so the callee's panic is the caller's
+panic. -/
+
+/-- `G` and then `F` are translated, and both sides give `expected` for a
+call of `F`. -/
+private def checkCalls (src : String) (args : List Int) (expected : Except Eval.Val Eval.Val) : Bool :=
+  match parseDecls src with
+  | .error _ => false
+  | .ok decls =>
+    let translated := Pure.translateFuncs decls ["G", "F"]
+    let vs := args.map Eval.Val.int
+    translated.length == 2 &&
+      same (IR.runIn (IR.functions (translated.map (·.1))) ⟨"", "F"⟩ vs) (some expected) &&
+      same (Eval.runIn (Eval.program decls) "F" vs) (some expected)
+
+/-- `G` is translated and `F` is refused. -/
+private def refusedCall (src : String) : Bool :=
+  match parseDecls src with
+  | .error _ => false
+  | .ok decls => (Pure.translateFuncs decls ["G", "F"]).map (·.2.name) == ["G"]
+
+private def g := "func G(a int, b int) int { return a / b }\n"
+
+#guard checkCalls (g ++ "func F(a int, b int) int { return G(a, b) }") [7, 2] (ok 3)
+#guard checkCalls (g ++ "func F(a int, b int) int { return G(a, b) }") [7, 0] panics
+#guard checkCalls (g ++ "func F(a int, b int) int { x := G(a, b); return x + 1 }") [7, 2] (ok 4)
+#guard checkCalls (g ++ "func F(a int, b int) int { x := G(a, b); return x + 1 }") [7, 0] panics
+#guard checkCalls (g ++ "func F(a int, b int) int { x := 1; x = G(a, b); return x }") [9, 3] (ok 3)
+#guard checkCalls (g ++ "func F(a int, b int) int { var x int = G(a, b); return x }") [9, 0] panics
+-- The arguments divide, and the call is in a branch.
+#guard checkCalls (g ++ "func F(a int, b int) int { return G(a / b, 1) }") [9, 0] panics
+#guard checkCalls (g ++ "func F(a int, b int) int { x := 0; if a > 0 { x = G(a, b) }; return x }")
+  [-1, 0] (ok 0)
+#guard checkCalls (g ++ "func F(a int, b int) int { x := 0; if a > 0 { x = G(a, b) }; return x }")
+  [1, 0] panics
+-- A function that does not divide can still panic through a call.
+#guard checkCalls (g ++ "func F(a int) int { return G(10, a) }") [0] panics
+-- A call inside an expression, or in `x op= …`, is refused.
+#guard refusedCall (g ++ "func F(a int, b int) int { return G(a, b) + 1 }")
+#guard refusedCall (g ++ "func F(a int, b int) int { x := 1; x += G(a, b); return x }")
+#guard refusedCall (g ++ "func F(a int, b int) bool { return G(a, b) > 0 }")
+#guard refusedCall (g ++ "func F(a int, b int) int { if G(a, b) > 0 { return 1 }; return 0 }")
 
 #print axioms Proof.translate_sound

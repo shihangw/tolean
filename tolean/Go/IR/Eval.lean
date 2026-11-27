@@ -12,9 +12,9 @@ value: an `Int` is `Val.int`, a `Bool` is `Val.bool` and a `String` is
 `Val.str`. A `Prop` such as `a < b` has the value of its `decide`.
 `Int.tdiv` and `Int.tmod` are total, as in Lean: a zero divisor gives `0`
 and the dividend. The translator tests the divisor before it divides, and
-`throw` of the message gives the outcome `panic`, as `Except.error` does. A
-`let`
-adds a binding in front, as Lean's shadowing does, and `let (x, y) := …`
+`throw` of the message gives the outcome `panic`, as `Except.error` does.
+`f a >>= fun x => rest` runs a call of a function that can panic: the call's
+panic ends the body, as `Except`'s bind does. A `let` adds a binding in front, as Lean's shadowing does, and `let (x, y) := …`
 gives `x` and `y` their new values.
 
 The evaluator gives a value only to the forms that the Go translator writes.
@@ -133,6 +133,19 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     | .normal inner => Body.exec fs fuel (← bindState names inner ρ) rest
     | .panic x => some (.panic x)
     | .ret _ => none
+  -- `f a b >>= fun x => rest`: the call's panic is the body's panic, and its
+  -- value is bound to `x` otherwise.
+  | .bind name ref args rest => do
+    let vs ← Expr.evalList fs fuel ρ args
+    match fuel with
+    | 0 => none
+    | fuel + 1 =>
+      let (params, body) ← fs.lookup ref
+      if params.length != vs.length then none
+      match ← Body.exec fs fuel (params.zip vs).reverse body with
+      | .ret v => Body.exec fs (fuel + 1) ((name, v) :: ρ) rest
+      | .panic x => some (.panic x)
+      | .normal _ => none
   | .fold names element body (.list items _) rest _ => do
     let values ← Expr.evalList fs fuel ρ items
     let result ← tolean.Core.Loop.runFold

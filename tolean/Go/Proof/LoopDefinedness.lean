@@ -5,8 +5,8 @@ namespace tolean.Go.Proof.LoopDefinedness
 /-- Existing call soundness permits an undefined target call. It only promises
 that a successful target call has the same source result. -/
 theorem empty_target_calls (p : Eval.Program) (fuel : Nat) : CallsAgree p [] fuel := by
-  intro f vs v h
-  cases fuel <;> simp [callO, List.lookup] at h
+  intro f vs r h
+  cases fuel <;> simp [callR, List.lookup] at h
 
 private def identityProgram : Eval.Program :=
   ⟨[("identity", ["x"], .ret default [.ident default "x"])], ["identity"]⟩

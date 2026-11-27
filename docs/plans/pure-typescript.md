@@ -279,8 +279,8 @@ the P2 steps. Steps with the same priority keep the order of their numbers.
 The steps keep the numbers that pull requests refer to, so a finished step
 leaves a gap.
 
-8. **P0.** Widen map borrows to early returns, several changed maps, an
-   ordinary returned value, control flow and imported callees.
+8. **P0.** Widen map borrows to early returns, an ordinary returned value,
+   control flow and imported callees. Several changed maps are done.
 10. **P1.** Sorting: number-key certificates inside the remaining callbacks, for changing loop state and body locals,
     remaining computed list shapes, and direct sorts or conditioned helpers
     under enclosing nullable narrowing. Calls inside nullable matches are

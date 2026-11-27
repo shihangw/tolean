@@ -118,8 +118,12 @@ written, so that other documents can name a step.
    throws. Certificates do not cover a function that can throw yet. Go uses
    the same `Body.throw` for a panic: its interpreter and IR evaluator have a
    panic outcome, and `translate_sound` covers integer `/` and `%`, whose
-   division by zero panics. A Go call of a function that can panic is not
-   translated yet, so the Go IR does not use `Body.bind`. State is not done.
+   division by zero panics, and a call of a function that can panic, which
+   the Go IR runs with `Body.bind`. State is not done, and Go does not need
+   it yet: the Go code that the proved path accepts reads only parameters and
+   locals, which the environment holds. Go will need state for package-level
+   variables and for slices, which a callee can change; build the state
+   piece with the first of these, so that Go is its second user.
 4. The `EStateM` lemmas are in the shared module `tolean/Core/EStateM.lean`,
    and `tolean/Core/Except.lean` holds `Core.Res`, the result of a
    computation that can fail or throw, with its bind lemmas. The lemmas for
