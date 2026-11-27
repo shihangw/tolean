@@ -135,6 +135,10 @@ jobs:
         working-directory: tests/go
         run: go run ./check
 
+      - name: Go interpreter and translation against the Go runtime, on random programs
+        working-directory: tests/go
+        run: go run ./differential
+
       - name: SQL translator against PostgreSQL
         working-directory: tests/sql
         run: go run ./pgcheck corpus

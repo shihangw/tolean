@@ -175,5 +175,24 @@ the wrapping arithmetic of the output would make it false.
 
 Three links of the chain are still trusted for a pure function. The parser
 is tested against `go/parser`. The printer writes the IR as Lean text, and
-the corpus tests it. The interpreter states what Go means, and no test
-compares it with the Go runtime yet.
+the corpus tests it. The interpreter states what Go means, and a test
+compares it with the Go runtime on random programs.
+
+That test is `tests/go/differential`. It writes random functions of the
+proved subset, calls each one with random arguments, and requires four
+results to agree: the value that `go run` prints, the interpreter's value,
+the value of the IR that `Pure.lean` builds, and the value of the Lean code
+that `tolean translate-go` prints. It also requires that `Pure.lean`
+accepts every generated function, so a generator that leaves the subset
+fails loudly instead of testing less. The test checks a sample, so it is
+evidence for the interpreter and the printer, not a proof. It assumes that
+`int` is 64 bits wide, as the interpreter does, so it runs on a 64-bit
+platform. When the subset grows, the generator should grow with it. Run it
+from `tests/go` after `lake build`:
+
+```sh
+go run ./differential
+```
+
+`TOLEAN_SEED` repeats a run, `TOLEAN_PROGRAMS` sets the number of random
+programs, and `TOLEAN_KEEP=1` keeps the generated files.
