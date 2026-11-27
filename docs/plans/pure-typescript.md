@@ -584,8 +584,10 @@ decision record then states the choice and any limits that remain.
   Its tactic proves the two known shapes. When the tactic fails, the project
   may supply the proof in a file beside the output, which the manifest
   records and the build checks for `sorry` and for axioms. The same
-  mechanism serves a `@decreases` measure, the counted-loop bound above, and
-  keys that must not be `NaN`. The statement always comes from Tolean and the
+  mechanism could later cover a `@decreases` measure and keys that must not
+  be `NaN`. Support for other comparator element types and captures of generic
+  types also remains open. Counted-loop bounds already become certificate
+  hypotheses, as described above. The statement always comes from Tolean and the
   project supplies only the proof, so a wrong proof fails the build and a
   wrong statement cannot get in. The obligation may restrict itself to the
   inputs, because a comparator on `number` keys is consistent only without
