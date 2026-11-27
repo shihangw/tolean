@@ -118,8 +118,9 @@ written, so that other documents can name a step.
    throws. Certificates do not cover a function that can throw yet. Go uses
    the same `Body.throw` for a panic: its interpreter and IR evaluator have a
    panic outcome, and `translate_sound` covers integer `/` and `%`, whose
-   division by zero panics, and a call of a function that can panic, which
-   the Go IR runs with `Body.bind`. State is not done, and Go does not need
+   division by zero panics, the index of a string, which panics out of
+   range, and a call of a function that can panic, which the Go IR runs
+   with `Body.bind`. State is not done, and Go does not need
    it yet: the Go code that the proved path accepts reads only parameters and
    locals, which the environment holds. Package-level constants need no state either,
    because the interpreter holds their values in the program. Go will need
