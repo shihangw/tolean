@@ -6,7 +6,8 @@ The part of the Go translator that builds the Tolean IR, for pure functions.
 
 A pure function here takes and returns `int`, `int64`, `bool` and `string`
 values, and calls only pure functions that this part has already
-translated. Its body may declare and assign locals, use `+=`, `-=`, `*=`,
+translated. It may read a constant of the package whose value is a literal,
+and the output writes that value where the function reads the name. Its body may declare and assign locals, use `+=`, `-=`, `*=`,
 `/=`, `%=`, `++` and `--`, test with `if`, `else` and `switch`, and return.
 An `if` or a `switch` may have an init statement. Integer arithmetic wraps
 through `Go.wrap64`, as Go's does.
@@ -154,6 +155,28 @@ def zeroCode : Ty → IR.Expr
 
 /-! ### Expressions -/
 
+/-- The code of a value: a literal. -/
+def valueCode : Eval.Val → IR.Expr
+  | .int n => .int n
+  | .bool b => .bool b
+  | .str s => .string s
+
+/-- The type of a constant of the package whose declaration names the type
+`type`, if any, and whose value is `v`. A constant without a type is untyped,
+as an integer, string or boolean literal is. An integer must fit in `int64`,
+because the output does not compute with exact constants. -/
+def constType (ctx : Ctx) (type : Option Expr) (v : Eval.Val) : Option Ty :=
+  let t? : Option Ty := match type, v with
+    | none, .int _ => some .untyped
+    | none, .bool _ => some .bool
+    | none, .str _ => some .string
+    | some te, _ => resolveType ctx te
+  match t?, v with
+  | some t, .int n => if t.isInt && -2 ^ 63 ≤ n && n < 2 ^ 63 then some t else none
+  | some .bool, .bool _ => some .bool
+  | some .string, .str _ => some .string
+  | _, _ => none
+
 /-- `a op b` on integers, which wraps. -/
 def arith (sp : Span) (op : tolean.IR.IntOp) (a : IR.Expr) (ta : Ty) (b : IR.Expr) (tb : Ty) :
     TM (IR.Expr × Ty) :=
@@ -292,6 +315,13 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
       match env.lookup name with
       | some l => pure (.var name, l.type)
       | none =>
+        -- A constant of the package is its value.
+        match ctx.program.consts.lookup name with
+        | some (te, v) =>
+          match constType ctx te v with
+          | some t => pure (valueCode v, t)
+          | none => reject sp s!"the constant '{name}' has a type outside the subset"
+        | none =>
         match Eval.predeclared ctx.program name with
         | some (.bool b) => pure (.bool b, .bool)
         | _ => reject sp s!"unknown name '{name}'"
@@ -630,11 +660,6 @@ def translateIf (ctx : Ctx) (env : Env) (tail : Tail) : Nat → Span → Expr �
 end
 
 /-! ### Functions -/
-
-def valueCode : Eval.Val → IR.Expr
-  | .int n => .int n
-  | .bool b => .bool b
-  | .str s => .string s
 
 /-- The first proved counted form starts the function body. Its body uses the
 existing state translation, so returns and nested loops remain refused. -/

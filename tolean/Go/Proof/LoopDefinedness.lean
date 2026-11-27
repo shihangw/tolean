@@ -9,7 +9,7 @@ theorem empty_target_calls (p : Eval.Program) (fuel : Nat) : CallsAgree p [] fue
   cases fuel <;> simp [callR, List.lookup] at h
 
 private def identityProgram : Eval.Program :=
-  ⟨[("identity", ["x"], .ret default [.ident default "x"])], ["identity"]⟩
+  ⟨[("identity", ["x"], .ret default [.ident default "x"])], ["identity"], []⟩
 
 theorem source_identity :
     callS identityProgram 1 "identity" [.int 7] = some (.ok (.int 7)) := by
