@@ -1,4 +1,4 @@
-// expect: 3:3 set, add and delete are allowed only on an owned map or set
+// expect: 7:1 a function may change only an array, a map or a set that it makes in a const
 function change(m: Map<string, bigint>, other: ReadonlyMap<string, bigint>): boolean {
   m.set('a', 1n);
   return other.has('a');
@@ -6,5 +6,6 @@ function change(m: Map<string, bigint>, other: ReadonlyMap<string, bigint>): boo
 
 export function f(): boolean {
   const m = new Map<string, bigint>();
-  return change(m, m);
+  const r = change(m, m);
+  return r;
 }

@@ -1336,8 +1336,8 @@ trusted](#what-is-proved-and-what-is-trusted).
 ### Map borrows
 
 A function may change Maps that its caller owns. The function must be
-declared earlier in the same file, have a `void` return type, and contain
-only `set`, `delete` and forwarding calls. Their arguments must be identifiers or
+declared earlier in the same file and contain only `set`, `delete` and
+forwarding calls, followed by a final `return` when it returns a value. Their arguments must be identifiers or
 literal numbers, bigints, strings or booleans. The function reaches the end
 of its body, optionally through a terminal bare `return;`. The interpreter
 executes the checked update prefix before copying out the map, so that
@@ -1390,8 +1390,26 @@ Here the caller writes `let (a, b) := (move a b k)`. The caller must pass a
 different map for each changed parameter. A call such as `move(a, a, k)`
 fails translation, because the two parameters would share one map.
 
-Early returns, returned values, branches, loops and imported borrows
-remain refused.
+A borrowing function may also return a value. Its body is straight-line
+updates followed by one final `return e;`, where `e` does not mention the
+changed maps:
+
+```ts
+function bump(m: Map<string, bigint>, k: string): bigint {
+  m.set(k, 1n);
+  return 1n;
+}
+```
+
+The Lean function returns the value first, then the changed maps, and the
+caller writes `let (n, m) := bump m k`. The value is bound under a fresh
+name, `result` unless the function already uses it. Such a call may only
+initialize a `const` or `let` declaration, as in `const n = bump(m, k);`. A
+call in any other position fails translation, as does a void borrow used as
+a value. An exported function may borrow its own Map parameter in this way.
+
+Early returns, branches, loops, throws and imported borrows remain refused.
+Borrowing functions receive no per-file certificate.
 Optional parameters and generic borrowing functions remain refused too.
 The certifier also refuses borrowing functions: its link proof does not
 yet describe the final map as the function's result.

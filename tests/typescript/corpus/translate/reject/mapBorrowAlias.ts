@@ -1,4 +1,4 @@
-// expect: 3:3 set, add and delete are allowed only on an owned map or set
+// expect: 9:17 an owned map or set may be read only through get, has and size, or in the return value
 function change(m: Map<string, bigint>): boolean {
   m.set('a', 1n);
   return true;

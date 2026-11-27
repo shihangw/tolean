@@ -895,14 +895,63 @@ def Stmt.borrowTargets (ps : List String) : Stmt → List String
       | _ => none
   | _ => []
 
-/-- A terminal bare return has no value for a void borrowing call. Keep its
-prefix so the borrowing call can copy the final parameter bindings out. -/
-def Stmt.borrowPrefix : Stmt → Stmt
-  | .block sp ss =>
+/-- The value that a borrowing function may return: an atom, a read of a
+map with `get`, `has` or `size`, or arithmetic, comparisons and `??` over
+such values. It calls no function, so it cannot change a map. -/
+def Expr.borrowValue : Expr → Bool
+  | .ident .. | .number .. | .bigint .. | .string .. | .bool .. => true
+  | .member _ (.ident ..) "size" => true
+  | .call _ (.member _ (.ident ..) method) [arg] => (method == "get" || method == "has") && arg.borrowAtom
+  | .paren _ e => e.borrowValue
+  | .binary _ _ a b => a.borrowValue && b.borrowValue
+  | _ => false
+
+/-- The updates of a borrowing function's body and the value it returns.
+A `void` function may end with a bare `return`, which the updates leave out.
+A function of another return type must end with `return e`, and `e` is the
+value. -/
+def Stmt.borrowSplit (ret : Option TypeExpr) : Stmt → Option (List Stmt × Option Expr)
+  | .block _ ss =>
+    match ret, ss.getLast? with
+    | some (.keyword _ "void"), some (.returnStmt _ none) => some (ss.dropLast, none)
+    | some (.keyword _ "void"), _ => some (ss, none)
+    | some _, some (.returnStmt _ (some e)) => some (ss.dropLast, some e)
+    | _, _ => none
+  | _ => none
+
+/-- The variable that keeps the value of a borrowing function: `result`,
+with as many `_` after it as it takes to be a name that is not a parameter
+and that the body does not mention. After a few tries the name may still be
+taken, and `borrowCandidate?` then refuses the function. -/
+def borrowResultName (params : List String) (body : Stmt) : String :=
+  go 8 "result"
+where
+  go : Nat → String → String
+    | 0, s => s
+    | n + 1, s => if params.contains s || body.mentions s then go n (s ++ "_") else s
+
+/-- The body that a borrowing function runs. A `void` function runs its
+updates, and the caller copies the final maps out of its parameters. A
+function that returns `e` assigns `e` to the variable `r` instead, which the
+caller binds before the call and reads after it, with the final maps. JS
+evaluates `e` after the updates and before the function ends, and so does the
+assignment. The function then completes normally, so that no other call of
+it gives a value. -/
+def Stmt.borrowBody (ret : Option TypeExpr) (r : String) (body : Stmt) : Stmt :=
+  match body, body.borrowSplit ret with
+  | .block sp _, some (ss, none) => .block sp ss
+  | .block sp _, some (ss, some e) =>
+    .block sp (ss ++ [.exprStmt sp (.assign sp .assign (.ident sp r) e)])
+  | _, _ => body
+
+/-- The variable that the body of a borrowing function that returns a value
+assigns its value to: the target of the last statement. -/
+def Stmt.borrowResult? : Stmt → Option String
+  | .block _ ss =>
     match ss.getLast? with
-    | some (.returnStmt _ none) => .block sp ss.dropLast
-    | _ => .block sp ss
-  | s => s
+    | some (.exprStmt _ (.assign _ .assign (.ident _ r) _)) => some r
+    | _ => none
+  | _ => none
 
 /-- The indices of the parameters whose type is a mutable `Map`. -/
 def mapParamIndices (params : List Param) : List Nat :=
@@ -920,12 +969,14 @@ mutable `Map` parameter must be changed by some statement, and every
 statement must change only candidates. Forwarded calls still need the
 callee-index check in `borrowParam?` before this becomes a signature. -/
 def borrowCandidate? (params : List Param) (ret : Option TypeExpr) (body : Stmt) : Option (List Nat) := do
-  let some (.keyword _ "void") := ret | none
-  let .block _ ss := body.borrowPrefix | none
+  let (ss, value) ← body.borrowSplit ret
   let is := mapParamIndices params
   let ps := paramNamesAt params is
   if is.isEmpty || params.any (·.optional) || ss.isEmpty || !(ss.all (·.borrowUpdate ps)) ||
-      !(ps.all fun p => ss.any fun s => (s.borrowTargets ps).contains p) then none
+      !(ps.all fun p => ss.any fun s => (s.borrowTargets ps).contains p) ||
+      !(value.all fun e => e.borrowValue && ps.all (fun p => !e.leaks p)) ||
+      (value.isSome && (let r := borrowResultName (params.map (·.name)) body
+        params.any (·.name == r) || body.mentions r)) then none
   else some is
 
 /-- A forwarded call changes a candidate parameter only when it occurs at
@@ -952,7 +1003,7 @@ def borrowParam? (borrows : List (String × List Nat)) (params : List Param)
     (ret : Option TypeExpr) (body : Stmt) : Option (List Nat) := do
   let is ← borrowCandidate? params ret body
   let ps := paramNamesAt params is
-  let .block _ ss := body.borrowPrefix | none
+  let (ss, _) ← body.borrowSplit ret
   if ss.all (·.borrowCallsValid borrows (params.map (·.name)) ps) then some is else none
 
 /-- The borrowed variables of a call: the identifier at each borrowed index,
@@ -984,6 +1035,23 @@ def Stmt.borrowOwnershipBody (borrows : List (String × List Nat)) (body : Stmt)
         else some (.block sp (targets.map fun (ms, map) =>
           .exprStmt sp (.call cs (.member ns (.ident ms map) "delete") others)))
       | none => if borrows.any (fun b => s.mentions b.1) then none else some s
+    -- `const v = f(m, x)`, where `f` returns a value too: the markers, then
+    -- `v` holds the other arguments, which is all that it may hold of the
+    -- caller's collections.
+    | .varDecl sp d =>
+      match d.init with
+      | some (.call cs (.ident ns fn) args) =>
+        match borrows.lookup fn with
+        | some is =>
+          let targets ← borrowTargetsAt args is
+          let others := argsExcept args is
+          if !decide (targets.map (·.2)).Nodup || targets.any (fun (_, map) => others.any (·.leaks map)) ||
+              borrows.any (fun b => others.any (fun e => (Stmt.exprStmt sp e).mentions b.1)) then none
+          else some (.block sp (targets.map (fun (ms, map) =>
+              .exprStmt sp (.call cs (.member ns (.ident ms map) "delete") others)) ++
+            [.varDecl sp { d with init := some (.array cs others) }]))
+        | none => if borrows.any (fun b => s.mentions b.1) then none else some s
+      | _ => if borrows.any (fun b => s.mentions b.1) then none else some s
     | _ => if borrows.any (fun b => s.mentions b.1) then none else some s
   return .block sp ss
 

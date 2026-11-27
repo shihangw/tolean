@@ -6,7 +6,7 @@ A function that changes a caller's map should return the new map, and the
 caller should bind that result in place of its old map. We choose this
 borrow translation rather than a state monad. This record settles the design
 question in step 8 of the [pure TypeScript plan](../plans/pure-typescript.md).
-The first implementation and two later extensions now cover the
+The first implementation and three later extensions now cover the
 [straight-line case](../typescript/README.md#map-borrows) described below.
 
 ## The result carries the maps
@@ -86,8 +86,16 @@ rule. Corpus tests check the generated code, and interpreter tests compare
 the caller's observations with Node. Readonly inputs retain their existing
 translation.
 
-Step 8 remains open. Ordinary returned results, early returns, branches, loops and imported borrowing functions remain
-refused. Borrowing functions receive no per-file certificate yet. A wider
+A borrowing function may also return an ordinary value through one final
+`return e;` after its updates. The spec runs the body with that return
+turned into an assignment to a fresh variable, so the call completes
+normally and the final maps are copied back as before. The Lean function
+returns a tuple of the value and the final maps, and the caller binds the
+value to the `const` or `let` that the call initializes. Only such a
+declaration may make the call.
+
+Step 8 remains open. Early returns, branches, loops, throws and imported
+borrowing functions remain refused. Borrowing functions receive no per-file certificate yet. A wider
 result must preserve the final parameter bindings on every supported
 completion path; the statement proof must also relate newly declared
 source and output variables before a returned value can be copied out.

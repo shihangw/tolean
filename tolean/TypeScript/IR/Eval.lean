@@ -724,7 +724,7 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
         | true, .ret (.ok w) => callResult names w
         | _, _ => none
       Body.exec fs (k + 1) (← bindState names inner ρ) rest
-  | .letBorrow names ref indices args rest => do
+  | .letBorrow none names ref indices args rest => do
     if !Eval.holdMaps ρ names then none
     let vs ← Expr.evalList fs fuel ρ args
     let fuel + 1 := fuel | none
@@ -735,6 +735,24 @@ def Body.exec (fs : List (DeclRef × List String × Body)) (fuel : Nat) (ρ : En
     if body.returnedState != some ps then none
     let .normal after ← Body.exec fs fuel (params.zip vs).reverse body | none
     Body.exec fs (fuel + 1) (← bindState names (← Eval.borrowedMaps after (names.zip ps)) ρ) rest
+  -- The body ends with the state of its value `r` and the final maps. The
+  -- call binds `r` first, as the source's call does. Each map goes back
+  -- into its variable, and then `x` takes the value, as the source declares
+  -- `x` after the call.
+  | .letBorrow (some x) names ref indices args rest => do
+    if !Eval.holdMaps ρ names then none
+    let vs ← Expr.evalList fs fuel ρ args
+    let fuel + 1 := fuel | none
+    let (params, body) ← fs.lookup ref
+    if params.length != vs.length then none
+    let ps ← indices.mapM (params[·]?)
+    if names.length != ps.length then none
+    let some (r :: ps') := body.returnedState | none
+    if ps' != ps || params.contains r then none
+    let .normal after ← Body.exec fs fuel ((r, .undefined) :: (params.zip vs).reverse) body | none
+    let w ← after.lookup r
+    let inner ← Eval.borrowedMaps after (names.zip ps)
+    Body.exec fs (fuel + 1) ((x, w) :: (← bindState names inner ρ)) rest
   | .letLifted name e rest => do Body.exec fs fuel ((name, ← Expr.eval fs fuel ρ e) :: ρ) rest
   | .fold names element body items rest _ => do
     let .list vs ← Expr.eval fs fuel ρ items | none

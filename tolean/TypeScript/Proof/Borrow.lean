@@ -182,7 +182,7 @@ theorem mem_borrowTargetsAt {args : List Expr} :
 theorem exec_letBorrow {fs : List (DeclRef × List String × IR.Body)}
     {fuel : Nat} {ρ : Eval.Env N} {names : List String} {ref : DeclRef} {indices : List Nat}
     {args : List IR.Expr} {rest : IR.Body} {o : Outcome N}
-    (h : IR.Body.exec fs fuel ρ (.letBorrow names ref indices args rest) = some o) :
+    (h : IR.Body.exec fs fuel ρ (.letBorrow none names ref indices args rest) = some o) :
     ∃ vs k ps body params after inner ρ₂,
       Eval.holdMaps ρ names = true ∧
       IR.Expr.evalList fs fuel ρ args = some vs ∧ fuel = k + 1 ∧
@@ -235,6 +235,78 @@ theorem exec_letBorrow {fs : List (DeclRef × List String × IR.Body)}
                   exact ⟨vs, k, ps, body, params, after, inner, ρ₂, hm, rfl, rfl, rfl, hl, hp, hn, hs,
                     hr, hi, hb, h⟩
             | _ => simp [hv, hf, hl, hp, hn, hs, hr] at h
+
+/-- A successful call of a borrowing function that returns a value binds
+its variable, and supplies the value and the callee's final maps. -/
+theorem exec_letBorrowValue {fs : List (DeclRef × List String × IR.Body)}
+    {fuel : Nat} {ρ : Eval.Env N} {x : String} {names : List String} {ref : DeclRef} {indices : List Nat}
+    {args : List IR.Expr} {rest : IR.Body} {o : Outcome N}
+    (h : IR.Body.exec fs fuel ρ (.letBorrow (some x) names ref indices args rest) = some o) :
+    ∃ vs k ps body params r after w inner ρ₂,
+      Eval.holdMaps ρ names = true ∧
+      IR.Expr.evalList fs fuel ρ args = some vs ∧ fuel = k + 1 ∧
+      fs.lookup ref = some (ps, body) ∧ ps.length = vs.length ∧
+      indices.mapM (ps[·]?) = some params ∧ names.length = params.length ∧
+      body.returnedState = some (r :: params) ∧ r ∉ ps ∧
+      IR.Body.exec fs k ((r, .undefined) :: (ps.zip vs).reverse) body = some (.normal after) ∧
+      after.lookup r = some w ∧
+      Eval.borrowedMaps after (names.zip params) = some inner ∧
+      IR.bindState names inner ρ = some ρ₂ ∧
+      IR.Body.exec fs fuel ((x, w) :: ρ₂) rest = some o := by
+  simp only [IR.Body.exec] at h
+  by_cases hm : Eval.holdMaps ρ names = true
+  rotate_left
+  · simp [hm] at h
+  simp only [hm, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+  cases hv : IR.Expr.evalList fs fuel ρ args with
+  | none => simp [hv] at h
+  | some vs =>
+    cases fuel with
+    | zero => simp [hv] at h
+    | succ k =>
+      cases hf : fs.lookup ref with
+      | none => simp [hv, hf] at h
+      | some pb =>
+        obtain ⟨ps, body⟩ := pb
+        by_cases hl : ps.length = vs.length
+        rotate_left
+        · simp [hv, hf, hl] at h
+        cases hp : indices.mapM (ps[·]?) with
+        | none => simp [hv, hf, hl, hp] at h
+        | some params =>
+          by_cases hn : names.length = params.length
+          rotate_left
+          · simp [hv, hf, hl, hp, hn] at h
+          cases hs : body.returnedState with
+          | none => simp [hv, hf, hl, hp, hn, hs] at h
+          | some rs =>
+            cases rs with
+            | nil => simp [hv, hf, hl, hp, hn, hs] at h
+            | cons r ps' =>
+              by_cases hq' : ps' = params
+              rotate_left
+              · simp [hv, hf, hl, hp, hn, hs, hq'] at h
+              subst hq'
+              by_cases hr : r ∈ ps
+              · simp [hv, hf, hl, hp, hn, hs, hr] at h
+              cases hrun : IR.Body.exec fs k ((r, .undefined) :: (ps.zip vs).reverse) body with
+              | none => simp [hv, hf, hl, hp, hn, hs, hr, hrun] at h
+              | some result =>
+                cases result with
+                | normal after =>
+                  cases hw : after.lookup r with
+                  | none => simp [hv, hf, hl, hp, hn, hs, hr, hrun, hw] at h
+                  | some w =>
+                    cases hi : Eval.borrowedMaps after (names.zip ps') with
+                    | none => simp [hv, hf, hl, hp, hn, hs, hr, hrun, hw, hi] at h
+                    | some inner =>
+                      cases hb : IR.bindState names inner ρ with
+                      | none => simp [hv, hf, hl, hp, hn, hs, hr, hrun, hw, hi, hb] at h
+                      | some ρ₂ =>
+                        simp [hv, hf, hl, hp, hn, hs, hr, hrun, hw, hi, hb] at h
+                        exact ⟨vs, k, ps, body, ps', r, after, w, inner, ρ₂, hm, rfl, rfl, rfl, hl, hp, hn,
+                          hs, hr, hrun, hw, hi, hb, h⟩
+                | _ => simp [hv, hf, hl, hp, hn, hs, hr, hrun] at h
 
 /-- The call invariant supplies a source normal completion with the same
 maps, which the call statement copies back into the caller's bindings. -/
