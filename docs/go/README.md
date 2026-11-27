@@ -91,7 +91,7 @@ a transfer with pure functions.
 ### What is proved
 
 A pure function takes and returns `int`, `int64`, `bool` and `string`
-values and calls only other pure functions. Its body may declare locals with
+values, one or several, and calls only other pure functions. Its body may declare locals with
 `:=` or `var`, assign them with `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `++`
 and `--`, test with `if`, `else` and `switch`, and return. The translator writes each pure
 function through `tolean/Go/Translate/Pure.lean`, which proves that
@@ -190,6 +190,29 @@ has effects, and binds each such call with `←`. It refuses one in the right
 operand of `&&` or `||`, because `←` would run it even when Go does not. The
 corpus package `panics` shows both.
 
+A pure function may have several results, which have no names, such as
+`func DivMod(a int, b int) (int, int)`. Its output returns a Lean tuple,
+`(Int × Int)`. `return a, b` evaluates its values from left to right, and
+`return f(…)` returns the results of a call with the same results. The
+statements `a, b := …` and `a, b = …` take their values from one call of a
+function with as many results, or from as many expressions, and any name
+may be the blank identifier `_`. Every value is evaluated before any local
+changes, so `a, b = b, a` swaps. The output takes the tuple apart with
+`let`:
+
+```lean
+def Rotate (a : Int) (b : Int) (c : Int) : Int :=
+  let (a, b, c) := (b, c, a)
+  (Go.wrap64 ((Go.wrap64 ((Go.wrap64 (a * (100 : Int))) + (Go.wrap64 (b * (10 : Int))))) + c))
+```
+
+The proved path refuses named results, a `:=` that would redeclare a local
+in scope, a call with several results of a function that can panic, two
+values of one statement that may each divide or index a string, and an
+assignment of several values in the body of a counted loop. The
+[decision record](../decisions/2026-11-26-go-multiple-results.md) gives the
+reasons, and the corpus package `multi` shows the output.
+
 The proved path also accepts a counted loop as the first statement of a
 function: `for i := a; i < b; i++ { body }`. Both bounds must be nonnegative
 integer literals below `2^63`, and the loop may take at most 256 iterations.
@@ -222,7 +245,7 @@ write text. It builds the [Tolean IR](../decisions/2026-10-30-tolean-ir.md),
 the Lean code it writes as Lean data. `tolean/Go/IR.lean` adds what only Go
 needs to the shared IR: `Go.wrap64`, `++` on strings, `pure` for the
 value of a function that can panic, and the byte operations on strings. The shared IR gives `Int.tdiv`,
-`Int.tmod` and `throw`.
+`Int.tmod`, `throw`, and the tuples of several results.
 `tolean/Go/IR/Eval.lean` gives the IR a meaning.
 
 `tolean/Go/Spec/Eval.lean` is an interpreter for the pure subset. It runs

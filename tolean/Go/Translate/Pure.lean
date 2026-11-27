@@ -44,24 +44,51 @@ that no typed value has fixed yet. A `byte` is what indexing a string gives;
 no parameter, result or declared variable has that type. -/
 inductive Ty where
   | int | int64 | bool | string | untyped | byte
+  /-- The results of a function with several results: `pair a (pair b c)`
+  for `(a, b, c)`, as Lean nests the tuple `A × B × C`. -/
+  | pair (a b : Ty)
 deriving DecidableEq, Repr, Inhabited
+
+/-- The types of the results that a type holds: the elements of a `pair`, or
+the type itself. -/
+def Ty.parts : Ty → List Ty
+  | .pair a b => a :: b.parts
+  | t => [t]
+
+/-- The type of a function's results. -/
+def Ty.tuple : List Ty → Ty
+  | [] => .bool
+  | [t] => t
+  | t :: ts => .pair t (Ty.tuple ts)
+
+mutual
 
 def Ty.lean : Ty → IR.Ty
   | .bool => .bool
   | .string => .string
   | .int | .int64 | .untyped | .byte => .int
+  | .pair a b => .tuple (a.lean :: Ty.leanRest b)
+
+/-- The elements of `A × B × C` after the first. -/
+def Ty.leanRest : Ty → List IR.Ty
+  | .pair a b => a.lean :: Ty.leanRest b
+  | .bool => [.bool]
+  | .string => [.string]
+  | .int | .int64 | .untyped | .byte => [.int]
+
+end
 
 /-- The types of `+`, `-`, `*`, `/` and `%`. Arithmetic on a `byte` wraps
 at 8 bits, which the subset leaves out. -/
 def Ty.isInt : Ty → Bool
   | .int | .int64 | .untyped => true
-  | .bool | .string | .byte => false
+  | .bool | .string | .byte | .pair .. => false
 
 /-- The integer types, which an integer constant can take and which the
 orders compare. -/
 def Ty.isNum : Ty → Bool
   | .int | .int64 | .untyped | .byte => true
-  | .bool | .string => false
+  | .bool | .string | .pair .. => false
 
 /-- The type that two operands share: the same type, or an untyped constant
 and an integer type. Two untyped constants share none, because the subset
@@ -161,6 +188,8 @@ def zeroCode : Ty → IR.Expr
   | .bool => .bool false
   | .string => .string ""
   | .int | .int64 | .untyped | .byte => .int 0
+  -- No declared variable has several values.
+  | .pair .. => .none
 
 /-! ### Expressions -/
 
@@ -169,6 +198,7 @@ def valueCode : Eval.Val → IR.Expr
   | .int n => .int n
   | .bool b => .bool b
   | .str s => .string s
+  | .pair a b => .tuple [valueCode a, valueCode b]
 
 /-- The type of a constant of the package whose declaration names the type
 `type`, if any, and whose value is `v`. A constant without a type is untyped,
@@ -179,6 +209,7 @@ def constType (ctx : Ctx) (type : Option Expr) (v : Eval.Val) : Option Ty :=
     | none, .int _ => some .untyped
     | none, .bool _ => some .bool
     | none, .str _ => some .string
+    | none, .pair .. => none
     | some te, _ => resolveType ctx te
   match t?, v with
   | some t, .int n => if t.isInt && -2 ^ 63 ≤ n && n < 2 ^ 63 then some t else none
@@ -238,6 +269,7 @@ def divisors : IR.Expr → List IR.Expr
   | .or a b => divisors a ++ divisors b
   | .call _ args => divisorsList args
   | .ext _ args => divisorsList args
+  | .tuple es => divisorsList es
   | _ => []
 where
   divisorsList : List IR.Expr → List IR.Expr
@@ -427,6 +459,25 @@ end
 
 /-! ### Statements -/
 
+/-- At most one of the codes has a check that can panic. Go fixes the order
+of calls only (Go specification, "Order of evaluation"), and gc may test a
+later value's divisor before an earlier value's index, so the subset leaves
+out two values that may panic. -/
+def checkedOnce (codes : List IR.Expr) : Bool :=
+  (codes.filter fun c => !(divisors c).isEmpty).length ≤ 1
+
+/-- The values on the right of `a, b := …` or `a, b = …`, as one tuple, and
+their types: a call with several results, or several expressions. -/
+def translateValues (ctx : Ctx) (env : Env) (sp : Span) : List Expr → TM (IR.Expr × List Ty)
+  | [e] => do
+    let (c, t) ← translateExpr ctx env exprFuel e
+    pure (c, t.parts)
+  | es => do
+    let codes ← translateArgs ctx env exprFuel es
+    unless checkedOnce (codes.map (·.1)) do
+      reject sp "at most one value may divide or index"
+    pure (IR.Expr.tuple (codes.map (·.1)), codes.map (·.2))
+
 /-- A statement that binds a call of a function that can panic: `return`,
 `x := …`, `x = …` or `var x T = …`. -/
 inductive BindForm where
@@ -582,6 +633,21 @@ def declare (env : Env) (sp : Span) (name : String) (type : Ty) : TM Env :=
   else if !nameOK name then reject sp s!"the name '{name}' is reserved"
   else pure (env ++ [⟨name, type⟩])
 
+/-- Declare the names that `a, b := …` gives values of the types `ts`. `_`
+declares nothing. -/
+def declareAll (env : Env) (sp : Span) : List (String × Ty) → TM Env
+  | [] => pure env
+  | (x, t) :: rest => do
+    if x == "_" then declareAll env sp rest
+    else declareAll (← declare env sp x t.typed) sp rest
+
+/-- Each name that `a, b = …` assigns is a local, and its value fits it. `_`
+takes any value. -/
+def assignsFit (env : Env) (xs : List (String × Ty)) : Bool :=
+  xs.all fun (x, t) => x == "_" || match env.lookup x with
+    | some l => t.fits l.type
+    | none => false
+
 mutual
 
 /-- The body for the statements `ss`, which end as `tail` says. -/
@@ -629,6 +695,31 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
       let (c, t) ← translateExpr ctx env exprFuel e
       unless t.fits result do reject sp "the value does not have the result type"
       pure (guarded c (.value (if monadic then IR.Expr.pure c else c)))
+    -- `return a, b`: a tuple of the values.
+    | .ret sp (e₁ :: e₂ :: es) => do
+      let .ret result monadic := tail | reject sp "only a branch that always returns may return"
+      unless rest.isEmpty do reject sp "the code after return is unreachable"
+      let codes ← translateArgs ctx env exprFuel (e₁ :: e₂ :: es)
+      unless argsFit codes result.parts do reject sp "the values do not fit the results"
+      unless checkedOnce (codes.map (·.1)) do reject sp "at most one value may divide or index"
+      let c := IR.Expr.tuple (codes.map (·.1))
+      pure (guarded c (.value (if monadic then IR.Expr.pure c else c)))
+    -- `a, b := …` and `a, b = …`, from a call with several results or from
+    -- as many values: `let (a, b) := …`.
+    | .assign sp op (l₁ :: l₂ :: ls) rhs => do
+      let some names := Eval.lhsNames (l₁ :: l₂ :: ls) | reject sp "the subset assigns only to names"
+      let (c, ts) ← translateValues ctx env sp rhs
+      unless ts.length = names.length do reject sp "the values do not match the names"
+      match AssignKind.ofString? op with
+      | some .define =>
+        unless names.any (· != "_") do reject sp "no new variables on the left of :="
+        let env' ← declareAll env sp (names.zip ts)
+        return guarded c (.letTuple names c (← translateStmts ctx env' tail fuel rest))
+      | some .assign =>
+        unless (names.filter (· != "_")).Nodup do reject sp "a name is assigned twice"
+        unless assignsFit env (names.zip ts) do reject sp "a value does not fit its local"
+        return guarded c (.letTuple names c (← translateStmts ctx env tail fuel rest))
+      | _ => reject sp s!"the operator '{op}' does not take several values"
     | .assign sp op [.ident _ x] [e] => do
       let some kind := AssignKind.ofString? op | reject sp s!"the operator '{op}' is not supported"
       let (c, t) ← translateExpr ctx env exprFuel e
@@ -749,12 +840,23 @@ def paramList (ctx : Ctx) : List Field → Option (List (String × Ty))
     let t ← resolveType ctx te
     return names.map (·, t) ++ (← paramList ctx rest)
 
+/-- The types of the results, which have no names. -/
+def resultList (ctx : Ctx) : List Field → Option (List Ty)
+  | [] => some []
+  | .mk _ [] rt none :: rest => do return (← resolveType ctx rt) :: (← resultList ctx rest)
+  | _ :: _ => none
+
+/-- The type of the results: one type, or a `pair` for several. -/
+def resultTy (ctx : Ctx) (results : List Field) : Option Ty := do
+  let ts ← resultList ctx results
+  if ts.isEmpty then none else some (Ty.tuple ts)
+
 /-- A pure function: its declaration in the output, and its signature. -/
 def translateFunc (ctx : Ctx) : Decl → TM (IR.Decl × FnSig)
-  | .func sp none name params (some [.mk _ [] rt none]) (.block _ body) => do
+  | .func sp none name params (some results) (.block _ body) => do
     unless nameOK name do reject sp s!"the name '{name}' is reserved"
     let some ps := paramList ctx params | reject sp "a parameter has a type outside the subset"
-    let some result := resolveType ctx rt | reject sp "the result has a type outside the subset"
+    let some result := resultTy ctx results | reject sp "the result has a type outside the subset"
     unless (ps.map (·.1)).Nodup do reject sp "two parameters have one name"
     unless ps.all (nameOK ·.1) do reject sp "a parameter has a reserved name"
     let env : Env := ps.map fun (n, t) => ⟨n, t⟩
@@ -769,7 +871,7 @@ def translateFunc (ctx : Ctx) : Decl → TM (IR.Decl × FnSig)
     let b ← translateTop ctx env result true body
     return (.function name (ps.map fun (n, t) => (n, t.lean)) (.except .string result.lean) b,
       ⟨name, ps.map (·.2), result, true⟩)
-  | .func sp .. => reject sp "only a function with one result and no receiver can be pure"
+  | .func sp .. => reject sp "only a function with results and no receiver can be pure"
   | .gen _ => throw "not a function"
 
 /-- The function `name` of the declarations, as a call of `name` finds it. -/

@@ -120,7 +120,9 @@ written, so that other documents can name a step.
    panic outcome, and `translate_sound` covers integer `/` and `%`, whose
    division by zero panics, the index of a string, which panics out of
    range, and a call of a function that can panic, which the Go IR runs
-   with `Body.bind`. State is not done, and Go does not need
+   with `Body.bind`. A Go function with several results returns the shared
+   IR's `tuple`, and `a, b := f()` takes it apart with `letTuple`, as
+   TypeScript's object destructuring does. State is not done, and Go does not need
    it yet: the Go code that the proved path accepts reads only parameters and
    locals, which the environment holds. Package-level constants need no state either,
    because the interpreter holds their values in the program. Go will need

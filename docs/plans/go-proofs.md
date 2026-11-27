@@ -43,7 +43,7 @@ Go guide documents it from then on.
 | A package-level `var` that a pure function reads, and a `const` built with `iota`, another constant or an operator | A `def` | A `var` that some function assigns |
 | A named type, such as `type Side string` | `abbrev` | Methods on a named type of a basic type, until methods are added |
 | A struct, its composite literals and its fields | A structure, and `{ s with f := e }` for an assignment to a field | Embedded fields, and a struct that a pointer can reach |
-| A function with several results, and `a, b := f()` | A tuple | Named results |
+| Named results, and `a, b := f()` where `f` can panic | A tuple in `Except`, bound with `>>=` | A bare `return` with named results, until it is modeled |
 | `error`, `errors.New` and `fmt.Errorf` with a leading `%w` | `Option GoError`, as today | Other uses of `fmt` |
 
 ### Statements and loops

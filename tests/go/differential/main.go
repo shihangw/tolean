@@ -28,8 +28,10 @@
 // where the subset allows it: alone after :=, =, var or return. Go's main
 // recovers each panic and prints its message. The generator also writes
 // len(s), the byte s[i] converted to int or int64, which panics when i is out
-// of range, and the orders of strings. When the subset grows, add the new
-// construct here too.
+// of range, and the orders of strings. Functions may have several results,
+// which `return` gives as values or as a call; `a, b := …` and `a, b = …`
+// take them from a call that cannot panic or from as many values, with blank
+// names. When the subset grows, add the new construct here too.
 //
 // Run it from tests/go after `lake build`:
 //
@@ -73,6 +75,21 @@ func (t ty) String() string {
 
 func (t ty) isInt() bool { return t == tInt || t == tInt64 }
 
+// results is every result of f, in order.
+func (f fn) results() []ty { return append([]ty{f.result}, f.more...) }
+
+// resultText is the result list of f's declaration.
+func (f fn) resultText() string {
+	if len(f.more) == 0 {
+		return f.result.String()
+	}
+	parts := make([]string, 0, 1+len(f.more))
+	for _, t := range f.results() {
+		parts = append(parts, t.String())
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+
 type local struct {
 	name    string
 	t       ty
@@ -84,6 +101,8 @@ type fn struct {
 	name   string
 	params []ty
 	result ty
+	// The results after the first, for a function with several results.
+	more []ty
 	// The body divides, or calls a function that may panic, so a call of it
 	// may panic.
 	panics bool
@@ -105,6 +124,8 @@ type gen struct {
 	inLoop, literalStrings bool
 	// The function being written divides or calls a function that may panic.
 	panics bool
+	// The results of the function being written.
+	results []ty
 	// The expression being written is the right operand of && or ||, or a part
 	// of a switch header, where the subset refuses a division and an index.
 	noDivide bool
@@ -233,7 +254,7 @@ func (g *gen) expr(t ty, depth int) (string, bool) {
 	}
 	var calls []fn
 	for _, f := range g.callable {
-		if f.result == t {
+		if f.result == t && len(f.more) == 0 {
 			calls = append(calls, f)
 		}
 	}
@@ -405,7 +426,7 @@ func (g *gen) division(t ty, op string, depth int) (string, bool) {
 func (g *gen) panicking(t ty) (string, bool) {
 	var fs []fn
 	for _, f := range g.callable {
-		if f.panics && f.result == t && !(g.inLoop && t == tString) {
+		if f.panics && f.result == t && len(f.more) == 0 && !(g.inLoop && t == tString) {
 			fs = append(fs, f)
 		}
 	}
@@ -513,7 +534,7 @@ func (g *gen) assign(mark int) bool {
 // stmts writes up to n statements that do not return.
 func (g *gen) stmts(n, depth int) {
 	for range n {
-		switch g.pick(7) {
+		switch g.pick(8) {
 		case 0, 1:
 			t := allTypes[g.pick(len(allTypes))]
 			if g.chance(0.2) {
@@ -554,12 +575,133 @@ func (g *gen) stmts(n, depth int) {
 			if depth > 0 && !g.inLoop {
 				g.stateSwitch(depth - 1)
 			}
-		default:
+		case 6:
 			if depth > 0 && !g.inLoop {
 				g.stateIfInit(depth - 1)
 			}
+		default:
+			// The proved counted loop leaves out a body that assigns
+			// several values.
+			if !g.inLoop {
+				g.multiAssign()
+			}
 		}
 	}
+}
+
+// multiCall returns a call of a function with the results ts that cannot
+// panic, and reports false when there is none. The subset refuses a call of
+// one that may panic.
+func (g *gen) multiCall(ts []ty) (string, []ty, bool) {
+	var fs []fn
+	for _, f := range g.callable {
+		if len(f.more) > 0 && !f.panics && (ts == nil || sameTypes(f.results(), ts)) {
+			fs = append(fs, f)
+		}
+	}
+	if len(fs) == 0 {
+		return "", nil, false
+	}
+	f := fs[g.pick(len(fs))]
+	args := make([]string, len(f.params))
+	for i, p := range f.params {
+		args[i], _ = g.expr(p, 1)
+	}
+	return fmt.Sprintf("%s(%s)", f.name, strings.Join(args, ", ")), f.results(), true
+}
+
+func sameTypes(a, b []ty) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// values returns a writer of the values of one `return` or assignment, which
+// lets at most one of them divide or index. Go fixes the order of calls only,
+// and gc may check a later value's divisor before an earlier one's index, so
+// the subset refuses two values that may panic.
+func (g *gen) values() func(t ty, depth int) (string, bool) {
+	saved, panicked := g.noDivide, false
+	return func(t ty, depth int) (string, bool) {
+		before := g.panics
+		g.panics = false
+		g.noDivide = saved || panicked
+		e, c := g.expr(t, depth)
+		g.noDivide = saved
+		panicked = panicked || g.panics
+		g.panics = before || g.panics
+		return e, c
+	}
+}
+
+// multiAssign writes `a, b := …` or `a, b = …`: from a call of a function
+// with several results, or from as many values, which are evaluated before
+// any is assigned. A name may be the blank identifier.
+func (g *gen) multiAssign() {
+	rhs, ts, ok := "", []ty(nil), false
+	if g.chance(0.5) {
+		rhs, ts, ok = g.multiCall(nil)
+	}
+	// Go gives a constant its default type, so `:=` declares no local from
+	// a constant value. A generated value is never dropped: it may read a
+	// local, which then counts as used.
+	var constant []bool
+	if !ok {
+		var es []string
+		values := g.values()
+		for range 2 + g.pick(2) {
+			t := allTypes[g.pick(len(allTypes))]
+			e, c := values(t, 2)
+			es = append(es, e)
+			ts = append(ts, t)
+			constant = append(constant, c)
+		}
+		rhs = strings.Join(es, ", ")
+	}
+	names := make([]string, len(ts))
+	if g.chance(0.5) {
+		blank := g.pick(len(ts) + 2)
+		declared := false
+		for i := range ts {
+			declared = declared || (i != blank && (constant == nil || !constant[i]))
+		}
+		// `:=` declares at least one new local.
+		if declared {
+			for i, t := range ts {
+				if i == blank || (constant != nil && constant[i]) {
+					names[i] = "_"
+				} else {
+					names[i] = g.declare(t).name
+				}
+			}
+			g.line("%s := %s", strings.Join(names, ", "), rhs)
+			return
+		}
+	}
+	// `=` assigns each local once; `_` takes a value that no local of its
+	// type is left for.
+	taken := map[*local]bool{}
+	for i, t := range ts {
+		names[i] = "_"
+		var free []*local
+		for _, l := range g.visible(t, true) {
+			if !taken[l] {
+				free = append(free, l)
+			}
+		}
+		if len(free) > 0 && g.chance(0.8) {
+			l := free[g.pick(len(free))]
+			taken[l] = true
+			names[i] = l.name
+		}
+	}
+	g.line("%s = %s", strings.Join(names, ", "), rhs)
 }
 
 // block writes `{ … }` whose statements change a local declared before it.
@@ -840,6 +982,9 @@ func (g *gen) returning(t ty, depth int) {
 		g.returning(t, depth-1)
 		g.indent--
 		g.line("}")
+	case len(g.results) > 1:
+		g.use(mark)
+		g.multiReturn()
 	default:
 		e, ok := "", false
 		if g.chance(0.2) {
@@ -852,6 +997,23 @@ func (g *gen) returning(t ty, depth int) {
 		g.line("return %s", e)
 	}
 	g.locals = g.locals[:mark]
+}
+
+// multiReturn writes the return of a function with several results: a call
+// of a function with the same results, or a value for each.
+func (g *gen) multiReturn() {
+	if g.chance(0.3) {
+		if e, _, ok := g.multiCall(g.results); ok {
+			g.line("return %s", e)
+			return
+		}
+	}
+	es := make([]string, len(g.results))
+	values := g.values()
+	for i, t := range g.results {
+		es[i], _ = values(t, 3)
+	}
+	g.line("return %s", strings.Join(es, ", "))
 }
 
 // loop writes the counted loop that may start a body: literal bounds that
@@ -892,7 +1054,8 @@ func (g *gen) function(f *fn) {
 		g.locals = append(g.locals, l)
 		params[i] = l.name + " " + p.String()
 	}
-	g.line("func %s(%s) %s {", f.name, strings.Join(params, ", "), f.result)
+	g.results = f.results()
+	g.line("func %s(%s) %s {", f.name, strings.Join(params, ", "), f.resultText())
 	g.indent++
 	if len(params) > 0 && g.chance(0.3) {
 		g.loop()
@@ -932,7 +1095,7 @@ type call struct {
 	fn               string
 	goArgs, leanVals []string
 	leanArgs         []string
-	result           ty
+	results          []ty
 	// The translation returns an Except.
 	panics bool
 }
@@ -1013,6 +1176,11 @@ func check(seed int64, programs int) error {
 		g.constants(p)
 		for j := range 1 + g.pick(4) {
 			f := fn{name: fmt.Sprintf("P%dF%d", p, j), result: allTypes[g.pick(len(allTypes))]}
+			if g.chance(0.25) {
+				for range 1 + g.pick(2) {
+					f.more = append(f.more, allTypes[g.pick(len(allTypes))])
+				}
+			}
 			for range g.pick(4) {
 				f.params = append(f.params, allTypes[g.pick(len(allTypes))])
 			}
@@ -1020,7 +1188,7 @@ func check(seed int64, programs int) error {
 			g.callable = append(g.callable, f)
 			order = append(order, f.name)
 			for range callsPerFunction {
-				c := call{fn: f.name, result: f.result, panics: f.panics}
+				c := call{fn: f.name, results: f.results(), panics: f.panics}
 				for _, t := range f.params {
 					a, v, l := g.value(t)
 					c.goArgs = append(c.goArgs, a)
@@ -1044,15 +1212,22 @@ func check(seed int64, programs int) error {
 		"\t\tif r := recover(); r != nil {\n\t\t\ts = fmt.Sprint(\"panic: \", r)\n\t\t}\n\t}()\n" +
 		"\treturn f()\n}\n\nfunc main() {\n")
 	for _, c := range calls {
-		format := "%d"
-		switch c.result {
-		case tBool:
-			format = "%t"
-		case tString:
-			format = "%q"
+		// Each result, separated by tabs, which %q escapes.
+		var formats, names []string
+		for i, t := range c.results {
+			format := "%d"
+			switch t {
+			case tBool:
+				format = "%t"
+			case tString:
+				format = "%q"
+			}
+			formats = append(formats, format)
+			names = append(names, fmt.Sprintf("r%d", i))
 		}
-		fmt.Fprintf(&m, "\tfmt.Println(show(func() string { return fmt.Sprintf(%q, %s(%s)) }))\n",
-			format, c.fn, strings.Join(c.goArgs, ", "))
+		fmt.Fprintf(&m, "\tfmt.Println(show(func() string { %s := %s(%s); return fmt.Sprintf(%q, %s) }))\n",
+			strings.Join(names, ", "), c.fn, strings.Join(c.goArgs, ", "),
+			strings.Join(formats, "\t"), strings.Join(names, ", "))
 	}
 	m.WriteString("}\n")
 	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(m.String()), 0o644); err != nil {
@@ -1110,19 +1285,38 @@ func check(seed int64, programs int) error {
 				leanString(label), leanCall, leanString(msg)))
 			continue
 		}
-		switch c.result {
-		case tBool:
-			leanResult, leanVal = results[i], "(.bool "+results[i]+")"
-		case tString:
-			s, err := strconv.Unquote(results[i])
-			if err != nil {
-				return fmt.Errorf("go run printed %q", results[i])
+		parts := strings.Split(results[i], "\t")
+		if len(parts) != len(c.results) {
+			return fmt.Errorf("go run printed %q for %d results", results[i], len(c.results))
+		}
+		var leanResults, leanVals []string
+		for j, t := range c.results {
+			switch t {
+			case tBool:
+				leanResult, leanVal = parts[j], "(.bool "+parts[j]+")"
+			case tString:
+				s, err := strconv.Unquote(parts[j])
+				if err != nil {
+					return fmt.Errorf("go run printed %q", results[i])
+				}
+				leanResult = leanString(s)
+				leanVal = "(.str " + leanResult + ")"
+			default:
+				leanResult = "(" + parts[j] + " : Int)"
+				leanVal = "(.int (" + parts[j] + "))"
 			}
-			leanResult = leanString(s)
-			leanVal = "(.str " + leanResult + ")"
-		default:
-			leanResult = "(" + results[i] + " : Int)"
-			leanVal = "(.int (" + results[i] + "))"
+			leanResults = append(leanResults, leanResult)
+			leanVals = append(leanVals, leanVal)
+		}
+		// Several results are a tuple in Lean and a right-nested pair in the
+		// interpreter.
+		leanResult = leanResults[0]
+		if len(leanResults) > 1 {
+			leanResult = "(" + strings.Join(leanResults, ", ") + ")"
+		}
+		leanVal = leanVals[len(leanVals)-1]
+		for j := len(leanVals) - 2; j >= 0; j-- {
+			leanVal = "(.pair " + leanVals[j] + " " + leanVal + ")"
 		}
 		vals = append(vals, fmt.Sprintf("  (%q, [%s], .ok %s)", c.fn, strings.Join(c.leanVals, ", "), leanVal))
 		check := fmt.Sprintf("%s == %s", leanCall, leanResult)

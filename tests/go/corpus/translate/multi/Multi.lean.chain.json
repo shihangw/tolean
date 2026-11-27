@@ -1,0 +1,36 @@
+{"tolean": "0.3.1",
+ "sources":
+ [{"sha256": "0306c0fa16af94038891fc65393a49fbb96c92b03bcc97ec8e72f82c45148d40",
+   "path": "corpus/translate/multi/multi.go"}],
+ "output":
+ {"sha256": "0bf7511af4a73c4af4af1d369c8657f3b898159a5d2a432c613f18a7c7705c31",
+  "path": "corpus/translate/multi/Multi.lean"},
+ "nodes":
+ [{"status": "tested",
+   "label": "Go parser",
+   "kind": "parser",
+   "id": "parser",
+   "evidence": {"reference": "go/parser", "check": "go-check", "by": "tolean"}},
+  {"status": "tested",
+   "label": "Go translator",
+   "kind": "translator",
+   "id": "translator",
+   "evidence":
+   {"reference": "fixed corpus output", "check": "go-check", "by": "tolean"}},
+  {"status": "trusted",
+   "module": "tolean.Go.Spec.Basic",
+   "label": "Go Spec",
+   "kind": "spec",
+   "id": "spec"},
+  {"status": "trusted",
+   "label": "Go compiler",
+   "kind": "runtime",
+   "id": "runtime"}],
+ "module": "Multi",
+ "language": "go",
+ "edges":
+ [["source", "parser"],
+  ["parser", "translator"],
+  ["translator", "output"],
+  ["spec", "output"],
+  ["runtime", "output"]]}

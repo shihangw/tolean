@@ -39,11 +39,16 @@ namespace tolean.Go.Eval
 open tolean.Go.Syntax
 open tolean.Core (Res)
 
-/-- A Go value of the subset. -/
+/-- A Go value of the subset. `pair` holds the results of a function with
+several results (Go specification, "Function types" and "Return
+statements"): `(a, b, c)` is `pair a (pair b c)`, nested to the right as
+Lean's tuples are. No Go variable holds a `pair`; an assignment takes it
+apart. -/
 inductive Val where
   | int (i : Int)
   | bool (b : Bool)
   | str (s : String)
+  | pair (a b : Val)
 deriving Inhabited, DecidableEq, Repr
 
 /-- The variables in scope, innermost first. -/
@@ -288,6 +293,60 @@ def withValue (r : Res Val Val) (k : Val → Option Outcome) : Option Outcome :=
 
 @[simp] theorem withValue_none (k : Val → Option Outcome) : withValue none k = none := rfl
 
+/-- Run `k` on the values of a list of expressions, as `withValue` does. -/
+def withValues (r : Res Val (List Val)) (k : List Val → Option Outcome) : Option Outcome :=
+  match r with
+  | none => none
+  | some (.error x) => some (.panic x)
+  | some (.ok vs) => k vs
+
+@[simp] theorem withValues_ok (vs : List Val) (k : List Val → Option Outcome) :
+    withValues (some (.ok vs)) k = k vs := rfl
+
+@[simp] theorem withValues_error (x : Val) (k : List Val → Option Outcome) :
+    withValues (some (.error x)) k = some (.panic x) := rfl
+
+@[simp] theorem withValues_none (k : List Val → Option Outcome) : withValues none k = none := rfl
+
+/-! ### Several values -/
+
+/-- The results of a function with several results, as one value. -/
+def tupleVal : List Val → Val
+  | [] => .bool true
+  | [v] => v
+  | v :: vs => .pair v (tupleVal vs)
+
+/-- The `n` results that the value `v` holds, for `n` at least 1. -/
+def untuple : Nat → Val → Option (List Val)
+  | 0, _ => none
+  | 1, v => some [v]
+  | n + 2, .pair a b => do return a :: (← untuple (n + 1) b)
+  | _ + 2, _ => none
+
+/-- The names on the left of an assignment, which must all be identifiers.
+`_` is the blank identifier. -/
+def lhsNames : List Expr → Option (List String)
+  | [] => some []
+  | .ident _ x :: rest => do return x :: (← lhsNames rest)
+  | _ :: _ => none
+
+/-- The variables that the names get, in order, without the blank
+identifier, which declares and assigns nothing (Go specification, "Blank
+identifier"). -/
+def bindings (names : List String) (vs : List Val) : List (String × Val) :=
+  (names.zip vs).filter (·.1 != "_")
+
+/-- Declare each variable of `bs` in order. -/
+def pushAll (bs : List (String × Val)) (env : Env) : Env :=
+  bs.foldl (fun env b => b :: env) env
+
+/-- Assign each variable of `bs` in order, when every one is in scope. -/
+def setAll (env : Env) : List (String × Val) → Option Env
+  | [] => some env
+  | (x, v) :: bs => do
+    let _ ← env.lookup x
+    setAll (env.set x v) bs
+
 /-- A finite counted head with literal bounds. The strict bound keeps the
 last increment within Go's signed 64-bit range. -/
 def countedHead : Option Stmt → Option Expr → Option Stmt → Option (String × List Val)
@@ -524,8 +583,36 @@ def evalList (p : Program) (fuel : Nat) (env : Env) : List Expr → Res Val (Lis
   | e :: es => (eval p fuel env e).andThen fun v => (evalList p fuel env es).andThen fun vs => .ok (v :: vs)
 termination_by es => (fuel, sizeOf es, 0)
 
+/-- The `n` values on the right of an assignment to `n` names: the results of
+one call, or `n` expressions, evaluated in order. -/
+def assignValues (p : Program) (fuel : Nat) (env : Env) (n : Nat) : List Expr → Res Val (List Val)
+  | [e] => (eval p fuel env e).andThen fun v => Res.lift (untuple n v)
+  | es => if es.length = n then evalList p fuel env es else none
+termination_by es => (fuel, sizeOf es, 1)
+
 def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
   | .ret _ [e] => withValue (eval p fuel env e) fun v => some (.ret v)
+  -- `return a, b`: the values are evaluated in order, and the function
+  -- returns all of them (Go specification, "Return statements").
+  | .ret _ (e₁ :: e₂ :: es) =>
+    withValues (evalList p fuel env (e₁ :: e₂ :: es)) fun vs => some (.ret (tupleVal vs))
+  -- `a, b := …` and `a, b = …` (Go specification, "Assignment statements"
+  -- and "Short variable declarations"). The right side is one call of a
+  -- function with as many results as the left side has names, or as many
+  -- expressions, evaluated in order. Then the variables are declared, or
+  -- assigned from left to right. A `:=` whose names include one in scope
+  -- would assign it if the scope is the innermost one, so the subset
+  -- leaves it out.
+  | .assign _ op (l₁ :: l₂ :: ls) rhs => do
+    let names ← lhsNames (l₁ :: l₂ :: ls)
+    let kind ← AssignKind.ofString? op
+    withValues (assignValues p fuel env names.length rhs) fun vs =>
+      match kind with
+      | .define =>
+        if names.any (fun x => x != "_" && (env.lookup x).isSome) then none
+        else some (.normal (pushAll (bindings names vs) env))
+      | .assign => do return .normal (← setAll env (bindings names vs))
+      | .compound _ => none
   | .assign _ op [.ident _ x] [e] =>
     match AssignKind.ofString? op with
     -- `x := e` declares `x` in the innermost scope.
