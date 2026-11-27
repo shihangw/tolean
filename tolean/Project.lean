@@ -180,14 +180,16 @@ def resolvedImports (s : Json) (files : List String) (source text : String)
   let m ← (TypeScript.Syntax.parse text target).mapError (·.render source)
   let mode := TypeScript.ModuleResolution.mode ((string? s "moduleResolution").getD "")
   let mut out := []
-  for d in m.decls do
-    if let .import span _ path := d then
-      -- Keep the existing translator's diagnostics for explicit-only projects.
-      if mode == .explicit && !(path.endsWith ".d.ts") then continue
-      let resolved ← (TypeScript.ModuleResolution.resolve mode files source path).mapError fun e =>
-        s!"{source}:{span.start.line}:{span.start.col}: {e}"
-      let relative := "./" ++ String.join (List.replicate (segments source).dropLast.length "../") ++ resolved
-      out := out ++ [(path, relative)]
+  let specifiers := m.decls.filterMap fun
+    | .import span _ path | .exports span _ (some path) => some (span, path)
+    | _ => none
+  for (span, path) in specifiers do
+    -- Keep the existing translator's diagnostics for explicit-only projects.
+    if mode == .explicit && !(path.endsWith ".d.ts") then continue
+    let resolved ← (TypeScript.ModuleResolution.resolve mode files source path).mapError fun e =>
+      s!"{source}:{span.start.line}:{span.start.col}: {e}"
+    let relative := "./" ++ String.join (List.replicate (segments source).dropLast.length "../") ++ resolved
+    out := out ++ [(path, relative)]
   return out
 
 /-- The files that a unit reads. -/
@@ -280,6 +282,7 @@ def typescriptImports (sources : List String) (read : String → Except String S
       let resolved := (resolvedImports s files source text target).toOption.getD []
       let m := { m with decls := m.decls.map fun
         | .import sp names path => .import sp names ((resolved.lookup path).getD path)
+        | .exports sp names (some path) => .exports sp names (some ((resolved.lookup path).getD path))
         | d => d }
       (TypeScript.Translate.importedFiles source m).filter sources.contains
 
