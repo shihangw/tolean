@@ -3959,10 +3959,12 @@ theorem EnumMember.wordsOK {T : Edition} (m : EnumMember) (hn : Word.ok T (prope
   unfold EnumMember.words
   words_ok
 
-theorem ImportName.wordsOK {T : Edition} (n : ImportName) (hn : Word.ok T (identWord n.name) = true) :
-    WordsOK T n.words := by
+theorem ImportName.wordsOK {T : Edition} (n : ImportName) (hn : Word.ok T (identWord n.name) = true)
+    (ha : ∀ a, n.alias = some a → Word.ok T (identWord a) = true) : WordsOK T n.words := by
   unfold ImportName.words
-  split <;> words_ok
+  cases hal : n.alias with
+  | none => simp only [aliasWords, List.append_nil]; split <;> words_ok
+  | some a => have := ha a hal; simp only [aliasWords]; split <;> words_ok
 
 /-- Every line that `st` prints, at every depth, has words that lex back. -/
 def StmtOK (T : Edition) (st : Stmt) : Prop := ∀ d, ∀ l ∈ st.lines d, WordsOK T l.2
@@ -6609,11 +6611,64 @@ theorem parseClass_wf {T : Edition} (start : Pos) (exported : Bool) :
     · cases hc
       exact ⟨fun q hq => (hpw' q (by simpa using hq)).2, hmok⟩
 
+theorem importTail_wf {T : Edition} {s₀ : ParseState} (hT : s₀.target = T)
+    {names names' : Array ImportName} {nt : Token} {ty : Bool} {name : String} {b : Bool} {s s' : ParseState}
+    (hR : Ready s) (hK : Kept s₀ s) (hall : ∀ n ∈ names.toList, n.ok = true ∧ WordsOK T n.words)
+    (hname : exprName name = true) (hnok : Word.ok T (identWord name) = true)
+    (h : Parse.importTail names nt ty name s = .ok (names', b) s') :
+    Ready s' ∧ Kept s₀ s' ∧ ∀ n ∈ names'.toList, n.ok = true ∧ WordsOK T n.words := by
+  simp only [Parse.importTail] at h
+  rw [Parse.bind_ok] at h
+  obtain ⟨al, s₁, hra, h⟩ := h
+  obtain ⟨hR₁, hK₁, hal, halw⟩ : Ready s₁ ∧ Kept s s₁ ∧ al.all exprName = true ∧
+      ∀ a, al = some a → Word.ok T (identWord a) = true := by
+    simp only [Parse.readAlias] at hra
+    obtain ⟨x, r, hs⟩ := hR.cons
+    rw [Parse.bind_eq (Parse.peek_eq hs)] at hra
+    by_cases has : x.isIdent "as" = true
+    · rw [if_pos has] at hra
+      have hxne : x.kind ≠ .eof := by simp only [Token.isIdent, beq_iff_eq] at has; rw [has]; simp
+      rw [Parse.bind_eq (Parse.discard_eq (advance_past hR hs hxne)), Parse.bind_ok] at hra
+      obtain ⟨a, s₂, hn, hra⟩ := hra
+      have hRp := hR.past hs (hR.more hs hxne)
+      have hw := readName_words hRp ((Kept.past _ _ _).target_eq.trans (hK.target_eq.trans hT)) hn
+      obtain ⟨tn, r₂, _, hnr, _, rfl, hR₂⟩ := readName_inv hRp hn
+      simp only [Parse.pure_ok] at hra
+      obtain ⟨rfl, rfl⟩ := hra
+      exact ⟨hR₂, (Kept.past _ _ _).trans (Kept.past _ _ _), by simpa [exprName] using hnr,
+        fun a' h' => by cases h'; exact hw⟩
+    · rw [if_neg has] at hra
+      simp only [Parse.pure_ok] at hra
+      obtain ⟨rfl, rfl⟩ := hra
+      exact ⟨hR, Kept.refl _, rfl, fun _ h => by cases h⟩
+  obtain ⟨hc, h⟩ := fail_inv h
+  obtain ⟨z, r₃, hs₃⟩ := hR₁.cons
+  rw [Parse.bind_eq (Parse.peek_eq hs₃)] at h
+  have hall' : ∀ n ∈ (names.push { span := nt.span, typeOnly := ty, name, alias := al }).toList,
+      n.ok = true ∧ WordsOK T n.words := by
+    intro n hn'
+    simp only [Array.toList_push, List.mem_append, List.mem_singleton] at hn'
+    rcases hn' with hn' | rfl
+    · exact hall n hn'
+    · refine ⟨?_, ImportName.wordsOK _ hnok halw⟩
+      simp only [ImportName.ok, hname, hal, Bool.true_and]
+      revert hc; cases al <;> cases ty <;> simp
+  have hK₂ : Kept s₀ s₁ := hK.trans hK₁
+  by_cases hcm : z.isPunct "," = true
+  · have hzne : z.kind ≠ .eof := by simp [Token.isPunct] at hcm; rw [hcm]; simp
+    rw [if_pos hcm, Parse.bind_eq (Parse.discard_eq (advance_past hR₁ hs₃ hzne))] at h
+    simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
+    exact ⟨hR₁.past hs₃ (hR₁.more hs₃ hzne), hK₂.trans (Kept.past _ _ _), hall'⟩
+  rw [if_neg hcm] at h
+  obtain ⟨_, h⟩ := fail_err (unexpected_refuses _ _) h
+  simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
+  exact ⟨hR₁, hK₂, hall'⟩
+
 theorem importStep_wf {T : Edition} {ct : Bool} {s₀ : ParseState} (hT : s₀.target = T)
     {names names' : Array ImportName} {b : Bool} {s s' : ParseState}
-    (hI : Ready s ∧ Kept s₀ s ∧ ∀ n ∈ names.toList, exprName n.name = true ∧ WordsOK T n.words)
+    (hI : Ready s ∧ Kept s₀ s ∧ ∀ n ∈ names.toList, n.ok = true ∧ WordsOK T n.words)
     (h : Parse.importStep ct names s = .ok (names', b) s') :
-    Ready s' ∧ Kept s₀ s' ∧ ∀ n ∈ names'.toList, exprName n.name = true ∧ WordsOK T n.words := by
+    Ready s' ∧ Kept s₀ s' ∧ ∀ n ∈ names'.toList, n.ok = true ∧ WordsOK T n.words := by
   obtain ⟨hR, hK, hall⟩ := hI
   obtain ⟨x, r, hs⟩ := hR.cons
   simp only [Parse.importStep] at h
@@ -6629,29 +6684,7 @@ theorem importStep_wf {T : Edition} {ct : Bool} {s₀ : ParseState} (hT : s₀.t
   obtain ⟨name, s₂, hn, h⟩ := h
   have hnok := readName_words hR₁ (hK₁.target_eq.trans (hK.target_eq.trans hT)) hn
   obtain ⟨tn, r₂, _, hnr, _, rfl, hR₂⟩ := readName_inv hR₁ hn
-  obtain ⟨z, r₃, hs₃⟩ := hR₂.cons
-  rw [Parse.bind_eq (Parse.peek_eq hs₃)] at h
-  by_cases has : z.isIdent "as" = true
-  · rw [if_pos has, Parse.bind_eq (Parse.peek_eq hs₃)] at h
-    exact absurd h ((refuseImport_refuses _).bind _ _ _ _)
-  rw [if_neg has, Parse.pure_bind, Parse.bind_eq (Parse.peek_eq hs₃)] at h
-  have hall' : ∀ n ∈ (names.push { span := y.span, typeOnly := ct || x.isIdent "type" &&
-      (s.rest[1]?.getD s.eof).isAnyIdent, name := name }).toList, exprName n.name = true ∧ WordsOK T n.words := by
-    intro n hn'
-    simp only [Array.toList_push, List.mem_append, List.mem_singleton] at hn'
-    rcases hn' with hn' | rfl
-    · exact hall n hn'
-    · exact ⟨by simpa [exprName] using hnr, ImportName.wordsOK _ hnok⟩
-  have hK₂ : Kept s₀ (past s₁ tn r₂) := hK.trans (hK₁.trans (Kept.past _ _ _))
-  by_cases hcm : z.isPunct "," = true
-  · have hzne : z.kind ≠ .eof := by simp [Token.isPunct] at hcm; rw [hcm]; simp
-    rw [if_pos hcm, Parse.bind_eq (Parse.discard_eq (advance_past hR₂ hs₃ hzne))] at h
-    simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
-    exact ⟨hR₂.past hs₃ (hR₂.more hs₃ hzne), hK₂.trans (Kept.past _ _ _), hall'⟩
-  rw [if_neg hcm] at h
-  obtain ⟨_, h⟩ := fail_err (unexpected_refuses _ _) h
-  simp only [Parse.pure_ok, Prod.mk.injEq] at h; obtain ⟨⟨rfl, _⟩, rfl⟩ := h
-  exact ⟨hR₂, hK₂, hall'⟩
+  exact importTail_wf hT hR₂ (hK.trans (hK₁.trans (Kept.past _ _ _))) hall (by simpa [exprName] using hnr) hnok h
 
 theorem parseImport_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseImport start) := by
   intro s d s' hR hT hF hL h
@@ -6675,7 +6708,7 @@ theorem parseImport_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseImport
     obtain ⟨names, s₃, hns, h⟩ := h
     obtain ⟨hR₃, hK₃, hnw⟩ := (iterate_inv
       (I := fun a st => Ready st ∧ Kept (past (past s₁ x r) y r₂) st ∧
-        ∀ n ∈ a.toList, exprName n.name = true ∧ WordsOK T n.words)
+        ∀ n ∈ a.toList, n.ok = true ∧ WordsOK T n.words)
       (fun _ _ _ _ _ hI hst => importStep_wf (s₀ := past (past s₁ x r) y r₂) (hK₁.target_eq.trans hT) hI hst) _ #[]
       _ names s₃
       ⟨hRp.past hs₂ (hRp.more hs₂ hyne), Kept.refl _, by simp⟩ hns).1
@@ -6716,7 +6749,7 @@ theorem parseImport_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseImport
     obtain ⟨names, s₃, hns, h⟩ := h
     obtain ⟨hR₃, hK₃, hnw⟩ := (iterate_inv
       (I := fun a st => Ready st ∧ Kept (past s₁ y r₂) st ∧
-        ∀ n ∈ a.toList, exprName n.name = true ∧ WordsOK T n.words)
+        ∀ n ∈ a.toList, n.ok = true ∧ WordsOK T n.words)
       (fun _ _ _ _ _ hI hst => importStep_wf (s₀ := past s₁ y r₂) (hK₁.target_eq.trans hT) hI hst) _ #[] _ names s₃
       ⟨hR₁.past hs₂ (hR₁.more hs₂ hyne), Kept.refl _, by simp⟩ hns).1
     rw [Parse.bind_ok] at h; obtain ⟨close, s₄, hcl, h⟩ := h
@@ -6762,7 +6795,7 @@ theorem parseExportList_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseEx
     rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
     obtain ⟨names, s₃, hns, h⟩ := h
     obtain ⟨hR₃, hK₃, hnw⟩ := (iterate_inv
-      (I := fun a st => Ready st ∧ Kept s₂ st ∧ ∀ n ∈ a.toList, exprName n.name = true ∧ WordsOK T n.words)
+      (I := fun a st => Ready st ∧ Kept s₂ st ∧ ∀ n ∈ a.toList, n.ok = true ∧ WordsOK T n.words)
       (fun _ _ _ _ _ hI hst => importStep_wf (s₀ := s₂) (hK₂.target_eq.trans (HK.target_eq.trans hT)) hI hst) _ #[]
       _ names s₃ ⟨hR₂, Kept.refl _, by simp⟩ hns).1
     rw [Parse.bind_ok] at h; obtain ⟨close, s₄, hcl, h⟩ := h
@@ -6810,7 +6843,7 @@ theorem parseExportList_wf {T : Edition} (start : Pos) : GivesD T (Parse.parseEx
     rw [Parse.bind_eq (Parse.budget_eq _), Parse.bind_ok] at h
     obtain ⟨names, s₃, hns, h⟩ := h
     obtain ⟨hR₃, hK₃, hnw⟩ := (iterate_inv
-      (I := fun a st => Ready st ∧ Kept s₂ st ∧ ∀ n ∈ a.toList, exprName n.name = true ∧ WordsOK T n.words)
+      (I := fun a st => Ready st ∧ Kept s₂ st ∧ ∀ n ∈ a.toList, n.ok = true ∧ WordsOK T n.words)
       (fun _ _ _ _ _ hI hst => importStep_wf (s₀ := s₂) (hK₂.target_eq.trans (HK.target_eq.trans hT)) hI hst) _ #[]
       _ names s₃ ⟨hR₂, Kept.refl _, by simp⟩ hns).1
     rw [Parse.bind_ok] at h; obtain ⟨close, s₄, hcl, h⟩ := h

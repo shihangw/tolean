@@ -1,0 +1,1 @@
+only a function of this file may be renamed with 'as' in an export list, and 'Point' is not one
