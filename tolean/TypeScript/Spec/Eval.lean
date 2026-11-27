@@ -113,6 +113,24 @@ def Env.set (env : Env N) (name : String) (v : Val N) : Env N :=
   | [] => []
   | (n, old) :: rest => if n == name then (n, v) :: rest else (n, old) :: Env.set rest name v
 
+/-- The maps that a borrowing call copies back: for each pair of a caller
+variable and a callee parameter, the variable with the map that the
+parameter holds in `after`. -/
+def borrowedMaps (after : Env N) (pairs : List (String × String)) : Option (Env N) :=
+  pairs.mapM fun (target, param) => do
+    let .map entries ← after.lookup param | none
+    return (target, .map entries)
+
+/-- Whether each of `names` holds a map. -/
+def holdMaps (env : Env N) (names : List String) : Bool :=
+  names.all fun n => match env.lookup n with
+    | some (.map _) => true
+    | _ => false
+
+/-- Change each variable of `binds` in `env`, in order. -/
+def Env.setAll (env : Env N) (binds : Env N) : Env N :=
+  binds.foldl (fun e (n, v) => e.set n v) env
+
 /-- The value of one digit in base `radix`, or none. -/
 def digitIn (radix : Nat) (c : Char) : Option Nat :=
   let v := if c.isDigit then c.toNat - '0'.toNat
@@ -1398,18 +1416,18 @@ structure Scope where
   file : String
 
 /-- Borrow signatures checked in declaration order. A forwarding function
-must put its map at the borrowed argument index of an earlier checked
-callee. Imports and generic functions are outside this borrow case. -/
-def moduleBorrows (file : Module) : List (String × Nat) :=
+must put each of its maps at a borrowed argument index of an earlier
+checked callee. Imports and generic functions are outside this borrow case. -/
+def moduleBorrows (file : Module) : List (String × List Nat) :=
   file.decls.foldl (fun borrows decl =>
     match decl with
     | .function _ _ name [] ps ret body =>
       match borrowParam? borrows ps ret body with
-      | some i => borrows ++ [(name, i)]
+      | some is => borrows ++ [(name, is)]
       | none => borrows
     | _ => borrows) []
 
-def borrowsOf (m : Scope) : List (String × Nat) :=
+def borrowsOf (m : Scope) : List (String × List Nat) :=
   ((m.program.lookup m.file).map moduleBorrows).getD []
 
 /-- `path` with `.` and `..` segments resolved, or none when `..` would leave
@@ -2334,14 +2352,17 @@ def execStmt (m : Scope) (fuel : Nat) (env : Env N) : Stmt → Option (Outcome N
         | (.error t, _) => some (.ret (.error t))
       | some _ => none
       | none =>
-        let i ← (borrowsOf m).lookup name
-        let some (.ident _ target) := args[i]? | none
+        let is ← (borrowsOf m).lookup name
+        let targets ← borrowTargetsAt args is
+        let targets := targets.map (·.2)
+        -- One map passed for two changed parameters would be shared, so
+        -- copying each parameter back would not be the JS meaning.
+        if !decide targets.Nodup then none
         let (params, body) ← (functionsOf m.program).lookup ⟨m.file, name⟩
-        let param ← params[i]?
-        let .map _ ← env.lookup target | none
+        if !holdMaps env targets then none
+        let ps ← is.mapM (params[·]?)
         let .normal after ← execStmt m fuel (← bindArgs params vs) body | none
-        let .map entries ← after.lookup param | none
-        return .normal (env.set target (.map entries))
+        return .normal (env.setAll (← borrowedMaps after (targets.zip ps)))
   | .exprStmt _ (.assign _ .assign (.ident _ name) value) => do
     return .normal (env.set name (← eval m fuel env value))
   -- `x ??= e` (`LogicalAssignment`, ECMA-262 §13.15.2): `e` runs, and its

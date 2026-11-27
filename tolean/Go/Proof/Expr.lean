@@ -97,10 +97,40 @@ def callO (fs : Funcs) (fuel : Nat) (ref : DeclRef) (vs : List Val) : Option Val
     | .ret v => some v
     | _ => none
 
-/-- Each call of the output that gives a value is a call that gives the same
-value in the interpreter. -/
+/-- A call of the function `ref` of the output, as `Body.bind` runs it: `.ok`
+of the value it returns, or `.error` of its panic. -/
+def callR (fs : Funcs) (fuel : Nat) (ref : DeclRef) (vs : List Val) : Option (Except Val Val) :=
+  match fuel with
+  | 0 => none
+  | fuel + 1 => do
+    let (params, body) ← fs.lookup ref
+    if params.length != vs.length then none
+    match ← IR.Body.exec fs fuel (params.zip vs).reverse body with
+    | .ret v => some (.ok v)
+    | .panic x => some (.error x)
+    | .normal _ => none
+
+/-- Each call of the output that returns a value or panics is a call that
+returns the same value or panics the same way in the interpreter. -/
 def CallsAgree (p : Eval.Program) (fs : Funcs) (fuel : Nat) : Prop :=
-  ∀ f vs v, callO fs fuel ⟨"", f⟩ vs = some v → callS p fuel f vs = some (.ok v)
+  ∀ f vs r, callR fs fuel ⟨"", f⟩ vs = some r → callS p fuel f vs = some r
+
+theorem callR_of_callO {fs : Funcs} {fuel : Nat} {ref : DeclRef} {vs : List Val} {v : Val}
+    (h : callO fs fuel ref vs = some v) : callR fs fuel ref vs = some (.ok v) := by
+  cases fuel with
+  | zero => simp [callO] at h
+  | succ fuel =>
+    simp only [callO] at h
+    simp only [callR]
+    cases hl : fs.lookup ref with
+    | none => simp [hl] at h
+    | some x =>
+      obtain ⟨ps, b⟩ := x
+      by_cases hlen : ps.length = vs.length
+      · cases hex : IR.Body.exec fs fuel (ps.zip vs).reverse b with
+        | none => simp [hl, hlen, hex] at h
+        | some o => cases o <;> simp [hl, hlen, hex] at h ⊢; exact h
+      · simp [hl, hlen] at h
 
 theorem eval_call (p : Eval.Program) (fuel : Nat) (ρ : Eval.Env) (sp sp' : Span) (f : String)
     (args : List Expr) (hb : Eval.builtin p f = none) :
@@ -913,7 +943,7 @@ theorem expr_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs 
                 refine ⟨ds, by simpa [divisors] using hds, hint, ?_⟩
                 rw [hp] at hbi
                 rw [eval_call p fuel ρs sp sp' f args hbi, hl, hargs]
-                simp only [andThen_outcome, hc f vs v hv]
+                simp only [andThen_outcome, hc f vs _ (callR_of_callO hv)]
                 exact outcome_some ds v
             · simp [hpanic, reject, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
       · exact absurd h reject_ne_ok

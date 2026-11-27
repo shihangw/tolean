@@ -15,8 +15,9 @@ Integer `/` and `%` are `Int.tdiv` and `Int.tmod`. Go panics when the divisor
 is zero, and Lean divides by zero without a panic, so a statement that
 divides first tests its divisors. When one of them is zero, the function
 throws the message of Go's panic. A function that can panic returns
-`Except String T` rather than `T`, and the functions of this part do not call
-it yet.
+`Except String T` rather than `T`. A call of it must stand alone on the right
+of `:=`, `=` or `var`, or after `return`, and the output binds it with
+`>>=`, so that its panic is the caller's panic.
 
 The translator is a total function, so that Lean can reason about it.
 `translate_sound` in `tolean/Go/Proof/Package.lean` proves that every
@@ -379,7 +380,8 @@ def translateExpr (ctx : Ctx) (env : Env) : Nat → Expr → TM (IR.Expr × Ty)
         | _ => reject sp s!"'{f}' takes one argument"
       | none => do
         let some sig := ctx.known.find? (·.name == f) | reject sp s!"'{f}' is not a pure function translated before this one"
-        if sig.panics then reject sp s!"'{f}' can panic, and a call of it is not supported yet"
+        if sig.panics then
+          reject sp s!"'{f}' can panic, so a call of it must stand alone after :=, =, var or return"
         let codes ← translateArgs ctx env fuel args
         unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
         pure (.call ⟨"", f⟩ (codes.map (·.1)), sig.result)
@@ -394,6 +396,42 @@ def translateArgs (ctx : Ctx) (env : Env) : Nat → List Expr → TM (List (IR.E
 end
 
 /-! ### Statements -/
+
+/-- A statement that binds a call of a function that can panic: `return`,
+`x := …`, `x = …` or `var x T = …`. -/
+inductive BindForm where
+  | ret
+  | define (x : String)
+  | assign (x : String)
+  | var (x : String) (type : Expr)
+
+/-- `e` is a call `f(args)` of a function `f` that can panic: `f`, the
+arguments and the signature of `f`. -/
+def panicCallee? (ctx : Ctx) (env : Env) : Expr → Option (String × List Expr × FnSig)
+  | .call _ (.ident _ f) args false =>
+    if env.has f || (Eval.builtin ctx.program f).isSome then none
+    else match ctx.known.find? (·.name == f) with
+      | some sig => if sig.panics then some (f, args, sig) else none
+      | none => none
+  | _ => none
+
+/-- `st` is a call of a function `f` that can panic, `f(args)`, in a form of
+`BindForm`: the form, its span, `f`, the arguments and the signature of `f`. -/
+def bindCall? (ctx : Ctx) (env : Env) (st : Stmt) :
+    Option (BindForm × Span × String × List Expr × FnSig) :=
+  match st with
+  | .ret sp [e] => (panicCallee? ctx env e).map fun (f, args, sig) => (.ret, sp, f, args, sig)
+  | .assign sp ":=" [.ident _ x] [e] =>
+    (panicCallee? ctx env e).map fun (f, args, sig) => (.define x, sp, f, args, sig)
+  | .assign sp "=" [.ident _ x] [e] =>
+    (panicCallee? ctx env e).map fun (f, args, sig) => (.assign x, sp, f, args, sig)
+  | .decl sp (.mk _ "var" [.value _ [x] (some te) [e]]) =>
+    (panicCallee? ctx env e).map fun (f, args, sig) => (.var x te, sp, f, args, sig)
+  | _ => none
+
+/-- The name that `return f(…)` binds the value of the call to. The body
+after the bind only returns it, so it may hide a local. -/
+def resultName : String := "result"
 
 /-- What the end of a statement list gives: the function's value, or the
 locals that a branch changes. A function that can panic (`monadic`) returns
@@ -524,6 +562,35 @@ def translateStmts (ctx : Ctx) (env : Env) (tail : Tail) : Nat → List Stmt →
     | .ret .. => throw "the function can end without a return"
     | .state names => pure (.state names)
   | fuel + 1, st :: rest =>
+    match bindCall? ctx env st with
+    | some (form, sp, f, args, sig) => do
+      let codes ← translateArgs ctx env exprFuel args
+      unless argsFit codes sig.params do reject sp "the arguments do not fit the parameters"
+      let cs := codes.map (·.1)
+      let ref : DeclRef := ⟨"", f⟩
+      -- The test of the arguments' divisors evaluates the call, as `guarded`
+      -- does for any statement.
+      let bound (x : String) (rb : IR.Body) : IR.Body := guarded (.call ref cs) (.bind x ref cs rb)
+      match form with
+      | .ret =>
+        let .ret result monadic := tail | reject sp "only a branch that always returns may return"
+        unless rest.isEmpty do reject sp "the code after return is unreachable"
+        unless sig.result.fits result do reject sp "the value does not have the result type"
+        let r := IR.Expr.var resultName
+        pure (bound resultName (.value (if monadic then IR.Expr.pure r else r)))
+      | .define x =>
+        let env' ← declare env sp x sig.result.typed
+        return bound x (← translateStmts ctx env' tail fuel rest)
+      | .assign x =>
+        let some l := env.lookup x | reject sp s!"unknown local '{x}'"
+        unless sig.result.fits l.type do reject sp "the value does not have the type of the local"
+        return bound x (← translateStmts ctx env tail fuel rest)
+      | .var x te =>
+        let some t := resolveType ctx te | reject sp "the subset has no such type"
+        unless sig.result.fits t do reject sp "the value does not have the declared type"
+        let env' ← declare env sp x t
+        return bound x (← translateStmts ctx env' tail fuel rest)
+    | none =>
     match st with
     | .ret sp [e] => do
       let .ret result monadic := tail | reject sp "only a branch that always returns may return"

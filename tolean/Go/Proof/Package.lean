@@ -276,11 +276,30 @@ theorem body_agree (fuel : Nat)
 fuel: a call at `fuel + 1` runs a body whose calls have `fuel`. -/
 theorem calls_agree : ∀ fuel, CallsAgree (Eval.program decls)
     (IR.functions ((translateFuncs decls order).map (·.1))) fuel
-  | 0 => fun f vs v h => by simp [callO] at h
-  | fuel + 1 => fun f vs v h => by
-    obtain ⟨psO, b, hl, hlen, hex⟩ := callO_some h
-    obtain ⟨ps, st, hl', hlen', hst⟩ := body_agree decls order fuel (calls_agree fuel) hl hlen
-    simp [callS, hl', hlen', hst _ hex (fun _ h => by cases h)]
+  | 0 => fun f vs r h => by simp [callR] at h
+  | fuel + 1 => fun f vs r h => by
+    simp only [callR] at h
+    cases hl : (IR.functions ((translateFuncs decls order).map (·.1))).lookup ⟨"", f⟩ with
+    | none => simp [hl] at h
+    | some x =>
+      obtain ⟨psO, b⟩ := x
+      by_cases hlen : psO.length = vs.length
+      · obtain ⟨ps, st, hl', hlen', hst⟩ := body_agree decls order fuel (calls_agree fuel) hl hlen
+        cases hex : IR.Body.exec (IR.functions ((translateFuncs decls order).map (·.1))) fuel
+            (psO.zip vs).reverse b with
+        | none => simp [hl, hlen, hex] at h
+        | some o =>
+          cases o with
+          | normal _ => simp [hl, hlen, hex] at h
+          | ret v =>
+            simp [hl, hlen, hex] at h
+            subst h
+            simp [callS, hl', hlen', hst _ hex (fun _ h => by cases h)]
+          | panic x =>
+            simp [hl, hlen, hex] at h
+            subst h
+            simp [callS, hl', hlen', hst _ hex (fun _ h => by cases h)]
+      · simp [hl, hlen] at h
 
 /-- The pure functions that the translator writes as IR mean what the
 source's functions mean: a call of one of them returns a value or panics only
