@@ -5,7 +5,7 @@
 The TypeScript translator is proved for every program it accepts. The Go
 translator is proved only for pure functions: those that take and return
 `int`, `int64`, `bool` and `string` values, and whose bodies declare and
-assign locals, test with `if` and return. The [Go guide](../go/README.md)
+assign locals, test with `if` and `switch`, and return. The [Go guide](../go/README.md)
 describes that part. Everything else still goes through the older string
 translation in `tolean/Go/Translate.lean`, which Lean cannot reason about,
 because it builds text with `partial def`.
@@ -56,11 +56,10 @@ Go guide documents it from then on.
 
 | Go | Lean | Refused |
 |---|---|---|
-| `switch` with a tag, and without one | A chain of `if` | `fallthrough`, which the parser refuses |
 | `for i := a; i < b; i++` | A same-type integer list, lowered through the [shared loop core](../decisions/2026-11-22-shared-loop-core.md) to `Body.fold`. The bound must not refer to the counter and must stay unchanged by the header update and the body. | Other updates or tests, mixed-type bounds, and bodies that assign the counter or change what the bound reads |
 | `for _, x := range xs` over a slice or array, with `break`, `continue` and `return` | Elements in order through the shared loop core, printed as `List.foldl` or `forIn`, with the shared return carrier where needed | A body that changes the iterable, including through an alias; range over a map, channel or function iterator |
 | `for i := range xs` or `for i, x := range xs` over a slice or array | Indices or index-value pairs through the same shared loop core | Lengths outside the modeled `int` range and the same mutation restrictions |
-| An `if` with an init statement, such as `if v := f(); v > 0` | A `let` before the `if` | |
+| An `if` with an init statement, or a `switch`, that returns on some path and has statements after it, such as `if v := f(); v > 0 { return v }; return 0` | The `let` of the init statement in front of the code after the `if` | Nothing yet. The translator refuses this form, because the code after the statement would run where the init statement's name is still bound. The [decision record](../decisions/2026-11-26-go-switch-as-if-chain.md) explains why. |
 
 Go supplies each loop head and its `HeadSim`, not a second fold proof.
 The shared interpreter requires `brk` and `cont` cases in Go's `Outcome`.

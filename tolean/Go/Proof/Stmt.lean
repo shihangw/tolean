@@ -1,4 +1,5 @@
 import tolean.Go.Proof.Expr
+import tolean.Go.Proof.Switch
 
 /-!
 The translation of a statement list means what the statements mean.
@@ -671,6 +672,120 @@ theorem guarded_sim {env : Pure.Env} {tail : Tail} {c : IR.Expr} {st : Stmt} {re
       exact exec_cons_panic p fuel hst
     · exact (hb ρs ρo ha hs hn).2.2 y hex
 
+/-- A statement that the interpreter runs as `b`, and that may assign what `b`
+assigns, means what `b` means. -/
+theorem sim_congr {env : Pure.Env} {tail : Tail} {a b : Stmt} {rest : List Stmt} {body : IR.Body}
+    (h : ∀ ρ, Eval.execStmt p fuel ρ a = Eval.execStmt p fuel ρ b)
+    (hch : ∀ k, k ∈ stmtChanges b → k ∈ stmtChanges a)
+    (hs : StmtSim p fs fuel env tail (b :: rest) body) : StmtSim p fs fuel env tail (a :: rest) body := by
+  intro ρs ρo ha hsc
+  obtain ⟨h1, h2, h3⟩ := hs ρs ρo ha hsc
+  rw [← exec_cons_congr p fuel h rest ρs] at h1 h2 h3
+  refine ⟨h1, fun ρo' hv => ?_, h3⟩
+  obtain ⟨ht, new, mod, hex, hag, hnew, hfr⟩ := h2 ρo' hv
+  refine ⟨ht, new, mod, hex, hag, hnew, hfr.mono fun k hk => ?_⟩
+  simp only [changesList, List.mem_append] at hk ⊢
+  exact hk.imp_left (hch k)
+
+/-- The changes of a switch's chain are those of its clauses. -/
+theorem chain_changes {tag : Option Expr} {k : String} :
+    ∀ (cs : List CaseClause) (dflt : Option (Span × List Stmt)) (d : Stmt),
+      switchChain tag dflt cs = some d → k ∈ stmtChanges d →
+        k ∈ changesClauses cs ∨ ∃ sp body, dflt = some (sp, body) ∧ k ∈ changesList body
+  | [], none, d, h, _ => by simp [switchChain] at h
+  | [], some (sp, body), d, h, hk => by
+    simp only [switchChain, Option.some.injEq] at h
+    subst h
+    exact .inr ⟨sp, body, rfl, by simpa [stmtChanges] using hk⟩
+  | .mk sp none body :: rest, dflt, d, h, hk => by
+    simp only [switchChain] at h
+    rcases chain_changes rest _ d h hk with hk | ⟨sp', body', he, hk⟩
+    · exact .inl (by simp [changesClauses, hk])
+    · simp only [Option.some.injEq, Prod.mk.injEq] at he
+      obtain ⟨rfl, rfl⟩ := he
+      exact .inl (by simp [changesClauses, hk])
+  | .mk sp (some es) body :: rest, dflt, d, h, hk => by
+    simp only [switchChain] at h
+    cases hc : caseCond sp tag es with
+    | none =>
+      simp only [hc] at h
+      rcases chain_changes rest _ d h hk with hk | hk
+      · exact .inl (by simp [changesClauses, hk])
+      · exact .inr hk
+    | some c =>
+      simp only [hc, Option.some.injEq] at h
+      subst h
+      simp only [stmtChanges, changesOption, List.nil_append, List.mem_append] at hk
+      rcases hk with hk | hk
+      · exact .inl (by simp [changesClauses, hk])
+      · cases hf : switchChain tag dflt rest with
+        | none => simp [hf, changesOption] at hk
+        | some f =>
+          simp only [hf, changesOption] at hk
+          rcases chain_changes rest _ f hf hk with hk | hk
+          · exact .inl (by simp [changesClauses, hk])
+          · exact .inr hk
+
+/-- A block that does not return means what its statements mean, and then
+what the rest means, with the locals that it changes. -/
+theorem block_state_sim {env : Pure.Env} {tail : Tail} {sp : Span} {body rest : List Stmt}
+    {inner rb : IR.Body}
+    (simB : StmtSim p fs fuel env (.state (changedNames body env)) body inner)
+    (simR : StmtSim p fs fuel env tail rest rb) :
+    StmtSim p fs fuel env tail (.block sp body :: rest) (.letState (changedNames body env) inner rb) := by
+  intro ρs ρo ha hs
+  have key : ∀ o, IR.Body.exec fs fuel ρo (.letState (changedNames body env) inner rb) = some o →
+      (∃ x, o = .panic x ∧ Eval.execStmt p fuel ρs (.block sp body) = some (.panic x)) ∨
+      ∃ mod ρ₁, Eval.execStmt p fuel ρs (.block sp body) = some (.normal mod) ∧
+        Agree mod ρ₁ ∧ Scoped env mod ∧ Frame (stmtChanges (.block sp body)) mod ρs ∧
+        IR.Body.exec fs fuel ρ₁ rb = some o := by
+    intro o hv
+    rcases out_letState fs fuel hv with ⟨x, hbr, rfl⟩ | ⟨inner', ρ₁, hbr, hbind, hrest⟩
+    · refine .inl ⟨x, rfl, ?_⟩
+      rw [execStmt_block, (simB ρs ρo ha hs).2.2 x hbr]; rfl
+    right
+    obtain ⟨-, new, mod, hexs, hag, hnew, hfr⟩ := (simB ρs ρo ha hs).2.1 inner' hbr
+    have hlen := hfr.length
+    refine ⟨mod, ρ₁, by rw [execStmt_block, hexs]; simp [hlen], ?_, ?_, ?_, hrest⟩
+    · intro k
+      rw [bindState_lookup hbind k]
+      split
+      · next hk =>
+        have hkenv := (mem_changedNames.mp hk).1
+        rw [← hag k, lookup_append_fresh mod (fun q hq heq => by
+          have := hnew q hq
+          rw [heq, hkenv] at this
+          exact Bool.noConfusion this)]
+      · next hk =>
+        rw [← ha k]
+        by_cases hkc : k ∈ changesList body
+        · have hkenv : env.has k = false := by
+            cases h' : env.has k
+            · rfl
+            · exact absurd (mem_changedNames.mpr ⟨h', hkc⟩) hk
+          have h1 := scoped_none hs hkenv
+          have h2 := hfr.isSome k
+          rw [h1] at h2 ⊢
+          simpa using h2
+        · exact hfr.lookup hkc
+    · exact fun k => (hfr.isSome k).trans (hs k)
+    · simpa [stmtChanges] using hfr
+  refine ⟨fun v hv => ?_, fun ρo' hv => ?_, fun y hv => ?_⟩
+  · rcases key _ hv with ⟨x, hx, -⟩ | ⟨mod, ρ₁, hb, ha', hs', -, hrest⟩
+    · cases hx
+    rw [exec_cons_normal p fuel hb]
+    exact (simR mod ρ₁ ha' hs').1 v hrest
+  · rcases key _ hv with ⟨x, hx, -⟩ | ⟨mod, ρ₁, hb, ha', hs', hfr, hrest⟩
+    · cases hx
+    obtain ⟨htail, new', mod', hex', hag', hnew', hfr'⟩ := (simR mod ρ₁ ha' hs').2.1 ρo' hrest
+    refine ⟨htail, new', mod', by rw [exec_cons_normal p fuel hb]; exact hex', hag', hnew', ?_⟩
+    simpa [changesList] using hfr'.trans hfr
+  · rcases key _ hv with ⟨x, hx, hb⟩ | ⟨mod, ρ₁, hb, ha', hs', -, hrest⟩
+    · cases hx
+      exact exec_cons_panic p fuel hb
+    rw [exec_cons_normal p fuel hb]
+    exact (simR mod ρ₁ ha' hs').2.2 y hrest
+
 /-! ### The translator on statements -/
 
 theorem declare_ok {env env' : Pure.Env} {sp : Span} {x : String} {ty : Ty}
@@ -936,6 +1051,69 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
             | _ :: _ :: _, h => simp [reject, throw, throwThe, MonadExceptOf.throw] at h
         -- `if`
         · next sp c t els => exact ihi env tail sp c t els rest body h
+        -- `if s; c { … }`, as the block `{ s; if c { … } }`
+        · next sp s c t els =>
+          refine sim_congr p fs fuel (fun ρ => execStmt_ifInit p fuel sp s c t els ρ)
+            (fun k hk => ?_) (ihs env tail _ body h)
+          simp only [stmtChanges, changesList, changesOption, List.nil_append, List.append_nil,
+            List.mem_append] at hk ⊢
+          rcases hk with hk | hk | hk <;> simp [hk]
+        -- `switch`, as a chain of `if` statements
+        · next sp init tag bsp clauses =>
+          by_cases hbad : (tag.isSome && !hasCase clauses) = true
+          · simp [hbad, reject, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
+          have hcase : tag.isSome = true → hasCase clauses = true := by
+            intro hs; simpa [hs] using hbad
+          simp only [hbad, Bool.false_eq_true, ↓reduceIte, pure_bind] at h
+          cases hd : switchChain tag none clauses with
+          | none => simp [hd, reject, throw, throwThe, MonadExceptOf.throw] at h
+          | some d =>
+            simp only [hd] at h
+            have hsw := execStmt_switch_chain p fuel (sp := sp) (bsp := bsp) hcase hd
+            have hch := fun (k : String) (hk : k ∈ stmtChanges d) => chain_changes clauses none d hd hk
+            cases init with
+            | none =>
+              refine sim_congr p fs fuel hsw (fun k hk => ?_) (ihs env tail _ body h)
+              rcases hch k hk with hk | ⟨_, _, he, _⟩
+              · simpa [stmtChanges, changesOption] using hk
+              · cases he
+            | some s =>
+              refine sim_congr p fs fuel (fun ρ => ?_) (fun k hk => ?_) (ihs env tail _ body h)
+              · rw [execStmt_switchInit, block_eq, block_eq, exec_cons_eq, exec_cons_eq]
+                congr 2
+                funext o
+                cases o with
+                | ret v => rfl
+                | panic x => rfl
+                | normal ρ₁ => exact exec_cons_congr p fuel hsw [] ρ₁
+              · simp only [stmtChanges, changesList, changesOption, List.append_nil,
+                  List.mem_append] at hk ⊢
+                rcases hk with hk | hk
+                · exact .inl hk
+                · rcases hch k hk with hk | ⟨_, _, he, _⟩
+                  · exact .inr hk
+                  · cases he
+        -- a block
+        · next sp bbody =>
+          split at h
+          · cases tail with
+            | state names => simp [reject, throw, throwThe, MonadExceptOf.throw] at h
+            | ret result monadic =>
+              cases rest with
+              | cons _ _ => simp [reject, throw, throwThe, MonadExceptOf.throw, bind, Except.bind] at h
+              | nil =>
+                tm_simp at h
+                have sim := ihs env (.ret result monadic) bbody body h
+                intro ρs ρo ha hs
+                refine ⟨fun v hv => ?_, fun ρo' hv => ?_, fun x hv => ?_⟩
+                · exact exec_cons_ret p fuel (block_ret p fuel (.block sp bbody)
+                    (by simpa [blockStatements] using (sim ρs ρo ha hs).1 v hv))
+                · exact absurd ((sim ρs ρo ha hs).2.1 ρo' hv).1 (by simp [Tail.isRet])
+                · exact exec_cons_panic p fuel (block_panic p fuel (.block sp bbody)
+                    (by simpa [blockStatements] using (sim ρs ρo ha hs).2.2 x hv))
+          · tm_simp at h
+            obtain ⟨-, inner, hinner, rb, hrb, rfl⟩ := h
+            exact block_state_sim p fs fuel (ihs env _ bbody inner hinner) (ihs env tail rest rb hrb)
         · exact absurd h reject_ne_ok
     · simp only [translateIf] at h
       rw [bind_ok] at h
@@ -1067,7 +1245,7 @@ theorem stmts_sound_aux {ctx : Ctx} (hp : ctx.program = p) (hc : CallsAgree p fs
               · exact hfr.lookup hkc
           · exact fun k => (hfr.isSome k).trans (hs k)
           · refine hfr.mono fun k hk => ?_
-            simp only [stmtChanges, List.mem_append]
+            simp only [stmtChanges, changesOption, List.nil_append, List.mem_append]
             cases b
             · right; simpa [branchOf, changesList_else] using hk
             · left; simpa [branchOf, changesList_block] using hk

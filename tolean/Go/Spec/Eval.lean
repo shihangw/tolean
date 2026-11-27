@@ -341,6 +341,11 @@ def zeroOf (p : Program) : Expr → Option Val
       | _ => none
   | _ => none
 
+/-- Every statement has a positive size, so that a statement with an init
+statement is larger than the same statement without it. -/
+theorem stmt_size_pos (s : Stmt) : 0 < sizeOf s := by
+  cases s <;> simp <;> omega
+
 mutual
 
 /-- The value of `e`. `fuel` bounds the depth of nested calls, so that the
@@ -438,6 +443,19 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     | _ => none
   -- `if c { … } else …` (Go specification, "If statements"). Each branch is
   -- a block, so what it declares goes out of scope at its end.
+  -- `if s; c { … } else …` (Go specification, "If statements"): the simple
+  -- statement `s` runs first, and the `if` is its own implicit block, so what
+  -- `s` declares goes out of scope at the end of the `if`.
+  | .ifStmt sp (some s) c t els => do
+    match ← execStmt p fuel env s with
+    | .ret v => some (.ret v)
+    | .panic x => some (.panic x)
+    | .normal env1 =>
+      have := stmt_size_pos s
+      match ← execStmt p fuel env1 (.ifStmt sp none c t els) with
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   | .ifStmt _ none c t els =>
     withValue (eval p fuel env c) fun
       | .bool b => do
@@ -450,6 +468,31 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
         | .panic x => some (.panic x)
         | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
       | _ => none
+  -- `switch s; x { case a, b: … default: … }` (Go specification, "Switch
+  -- statements"). The simple statement `s` runs first, in the implicit block
+  -- of the `switch`.
+  | .switchStmt sp (some s) tag bsp clauses => do
+    match ← execStmt p fuel env s with
+    | .ret v => some (.ret v)
+    | .panic x => some (.panic x)
+    | .normal env1 =>
+      have := stmt_size_pos s
+      match ← execStmt p fuel env1 (.switchStmt sp none tag bsp clauses) with
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
+  -- The switch expression is evaluated exactly once, and a missing one stands
+  -- for the boolean value `true`. Each clause is an implicit block, so what
+  -- it declares goes out of scope at its end. The subset has no
+  -- `fallthrough`: the parser refuses it.
+  | .switchStmt _ none tag _ clauses =>
+    withValue (match tag with
+        | none => Res.ok (.bool true)
+        | some x => eval p fuel env x) fun v => do
+      match ← execClauses p fuel env v clauses none with
+      | .ret v => some (.ret v)
+      | .panic x => some (.panic x)
+      | .normal env' => some (.normal (env'.drop (env'.length - env.length)))
   | .block _ body => do
     match ← exec p fuel env body with
     | .ret v => some (.ret v)
@@ -471,6 +514,36 @@ def execStmt (p : Program) (fuel : Nat) (env : Env) : Stmt → Option Outcome
     | _ => none
   | _ => none
 termination_by s => (fuel, sizeOf s, 0)
+
+/-- The clauses of an expression switch whose switch expression has the
+value `v` (Go specification, "Expression switches"). The case expressions are
+evaluated left to right and top to bottom, and the first one that equals `v`
+picks its clause. When none does, the `default` clause runs, wherever it
+stands. `dflt` is the body of the `default` clause seen so far. A panic in a
+case expression is a panic of the switch. -/
+def execClauses (p : Program) (fuel : Nat) (env : Env) (v : Val) :
+    List CaseClause → Option (List Stmt) → Option Outcome
+  | [], none => some (.normal env)
+  | [], some body => exec p fuel env body
+  | .mk _ none body :: rest, _ => execClauses p fuel env v rest (some body)
+  | .mk _ (some es) body :: rest, dflt =>
+    match matchAny p fuel env v es with
+    | none => none
+    | some (.error x) => some (.panic x)
+    | some (.ok true) => exec p fuel env body
+    | some (.ok false) => execClauses p fuel env v rest dflt
+termination_by cs dflt => (fuel, sizeOf cs + sizeOf dflt, 0)
+
+/-- Some case expression of `es` equals `v`. They are evaluated in order,
+until one does. -/
+def matchAny (p : Program) (fuel : Nat) (env : Env) (v : Val) : List Expr → Res Val Bool
+  | [] => Res.ok false
+  | e :: es => (eval p fuel env e).andThen fun w =>
+    match eqVal v w with
+    | none => none
+    | some true => Res.ok true
+    | some false => matchAny p fuel env v es
+termination_by es => (fuel, sizeOf es, 0)
 
 /-- Run statements in order, until one returns or panics. -/
 def exec (p : Program) (fuel : Nat) (env : Env) : List Stmt → Option Outcome
