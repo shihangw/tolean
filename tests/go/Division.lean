@@ -110,6 +110,11 @@ private def g := "func G(a int, b int) int { return a / b }\n"
 #guard checkCalls (g ++ "func F(a int, b int) int { var x int = G(a, b); return x }") [9, 0] panics
 -- The arguments divide, and the call is in a branch.
 #guard checkCalls (g ++ "func F(a int, b int) int { return G(a / b, 1) }") [9, 0] panics
+-- The argument divides by zero, and Lean's quotient, zero, would make the
+-- callee divide by zero too. The panic is the argument's, and the output
+-- tests it without calling the callee.
+#guard checkCalls (g ++ "func F(a int, b int) int { return G(1, a / b) }") [9, 0] panics
+#guard checkCalls (g ++ "func F(a int, b int) int { x := G(1, a / b); return x }") [9, 0] panics
 #guard checkCalls (g ++ "func F(a int, b int) int { x := 0; if a > 0 { x = G(a, b) }; return x }")
   [-1, 0] (ok 0)
 #guard checkCalls (g ++ "func F(a int, b int) int { x := 0; if a > 0 { x = G(a, b) }; return x }")
