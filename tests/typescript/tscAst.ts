@@ -446,18 +446,21 @@ class Printer {
       refuse(s, 'import defer');
     }
     const clauseType = clause.phaseModifier === ts.SyntaxKind.TypeKeyword;
-    const names = bindings.elements.map((el) => {
-      if (el.propertyName !== undefined) {
-        refuse(el, 'import alias');
-      }
-      const typeOnly = clauseType || el.isTypeOnly;
-      return this.node('name', el.name, [this.name(el.name), ...(typeOnly ? ['type'] : [])], []);
-    });
+    const names = bindings.elements.map((el) => this.importName(el, clauseType || el.isTypeOnly));
     const source = (s.moduleSpecifier as ts.StringLiteral).text;
     return this.node('import', s, [JSON.stringify(source)], names);
   }
 
-  // `export { a, type B }`, `export type { B }` and `export { a } from "./x.ts"`.
+  // A name of an import or an export list: `a`, `type B` or `a as b`. The
+  // span is the name before `as`, as Tolean keeps it.
+  private importName(el: ts.ImportSpecifier | ts.ExportSpecifier, typeOnly: boolean): Sexp {
+    const original = el.propertyName ?? el.name;
+    const alias = el.propertyName === undefined ? [] : ['as', this.name(el.name)];
+    return this.node('name', original, [this.name(original), ...(typeOnly ? ['type'] : []), ...alias], []);
+  }
+
+  // `export { a, type B }`, `export type { B }`, `export { a } from "./x.ts"`
+  // and `export { a as b }`.
   private exportDecl(s: ts.ExportDeclaration): Sexp {
     const clause = s.exportClause;
     if (clause === undefined || !ts.isNamedExports(clause) || s.attributes !== undefined ||
@@ -467,13 +470,7 @@ class Printer {
     if (clause.elements.length === 0) {
       refuse(s, 'empty export list');
     }
-    const names = clause.elements.map((el) => {
-      if (el.propertyName !== undefined || !ts.isIdentifier(el.name)) {
-        refuse(el, 'export alias');
-      }
-      const typeOnly = s.isTypeOnly || el.isTypeOnly;
-      return this.node('name', el.name, [this.name(el.name), ...(typeOnly ? ['type'] : [])], []);
-    });
+    const names = clause.elements.map((el) => this.importName(el, s.isTypeOnly || el.isTypeOnly));
     const atoms = s.moduleSpecifier === undefined ? [] : [JSON.stringify((s.moduleSpecifier as ts.StringLiteral).text)];
     return this.node('export', s, atoms, names);
   }
